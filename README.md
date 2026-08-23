@@ -30,7 +30,7 @@ J:\dv\aib\local\models
 
 ## Quick start on Windows
 
-After cloning the repository to `J:\dv\aib`:
+Clone/pull the repository to `J:\dv\aib` and run:
 
 ```powershell
 cd J:\dv\aib
@@ -39,16 +39,18 @@ powershell -ExecutionPolicy Bypass -File .\local\setup.ps1
 
 The setup script:
 
-1. checks that Ollama is installed;
+1. checks that Ollama and Python are installed;
 2. configures `OLLAMA_MODELS` to `J:\dv\aib\local\models` for the current user;
-3. creates a Python virtual environment;
-4. installs API dependencies;
+3. restarts Ollama with that model-storage path;
+4. creates a Python virtual environment and installs API dependencies;
 5. downloads the initial local models.
 
-After setup, restart Ollama so it sees the new model-storage path. Then start the API:
+If Ollama is not installed, the script prints the Windows install command and stops. Run it again after installing Ollama.
+
+Start `aib`:
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8181
+powershell -ExecutionPolicy Bypass -File .\local\start.ps1
 ```
 
 Check:
@@ -56,6 +58,7 @@ Check:
 ```text
 http://127.0.0.1:8181/health
 http://127.0.0.1:8181/models
+http://127.0.0.1:8181/docs
 ```
 
 ## API
