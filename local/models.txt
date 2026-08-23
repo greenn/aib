@@ -1,0 +1,4 @@
+qwen3:4b
+qwen3:8b
+gemma3:4b
+nomic-embed-text
