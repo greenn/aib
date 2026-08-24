@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>aib local chat</title>
+  <link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <div class="brand">aib</div>
+        <div class="subtitle">local chat</div>
+      </div>
+      <div class="controls">
+        <label class="model-control">
+          <span>Model</span>
+          <select id="modelSelect"></select>
+        </label>
+        <button id="newChatButton" class="secondary" type="button">New chat</button>
+      </div>
+    </header>
+
+    <section id="statusBar" class="status-bar">Connecting…</section>
+
+    <section id="messages" class="messages" aria-live="polite">
+      <div class="empty-state" id="emptyState">
+        <h1>Local AI</h1>
+        <p>Choose a model and send a message. Requests stay on this computer.</p>
+      </div>
+    </section>
+
+    <section id="metrics" class="metrics" hidden>
+      <span id="metricModel">—</span>
+      <span id="metricWall">—</span>
+      <span id="metricLoad">—</span>
+      <span id="metricGeneration">—</span>
+      <span id="metricTps">—</span>
+      <span id="metricRam">—</span>
+    </section>
+
+    <form id="chatForm" class="composer">
+      <textarea id="promptInput" rows="1" placeholder="Message local model…" autocomplete="off"></textarea>
+      <button id="sendButton" type="submit">Send</button>
+    </form>
+  </main>
+
+  <script src="/ui/app.js" defer></script>
+</body>
+</html>
