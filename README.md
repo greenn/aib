@@ -8,7 +8,7 @@ Local backend for AI models.
 
 ```text
 aib/
-├─ api/       HTTP API
+├─ api/       HTTP API and local test UI
 ├─ local/     local-model setup and configuration
 └─ gemini/    Gemini integration (later)
 ```
@@ -41,11 +41,9 @@ The setup script:
 
 1. checks that Ollama and Python are installed;
 2. configures `OLLAMA_MODELS` to `J:\dv\aib\local\models` for the current user;
-3. restarts Ollama with that model-storage path;
+3. starts the Ollama CLI server with that model-storage path;
 4. creates a Python virtual environment and installs API dependencies;
-5. downloads the initial local models.
-
-If Ollama is not installed, the script prints the Windows install command and stops. Run it again after installing Ollama.
+5. checks/downloads the initial local models.
 
 Start `aib`:
 
@@ -64,13 +62,33 @@ API docs: http://127.0.0.1:8181/docs
 
 Use the URLs printed by `start.ps1`.
 
+## Local chat UI
+
+Open `/chat` on the same host and port printed by `start.ps1`:
+
+```text
+http://127.0.0.1:<port>/chat
+```
+
+The UI provides:
+
+- installed chat-model selector;
+- conversational history for the current browser tab;
+- new-chat reset;
+- response wall time;
+- model load time;
+- generation time;
+- tokens per second;
+- current system RAM usage.
+
 ## API
 
 Initial endpoints:
 
-- `GET /health` — service status and Ollama connectivity.
+- `GET /health` — service status, memory and Ollama connectivity.
 - `GET /models` — configured models and their local availability.
-- `POST /chat` — text generation through a selected local model.
+- `GET /chat` — local browser chat UI.
+- `POST /chat` — conversational text generation through a selected local model.
 - `POST /embed` — embeddings through `nomic-embed-text`.
 
 Default model: `qwen3:4b`.
