@@ -14,15 +14,30 @@
         <div class="subtitle">local chat</div>
       </div>
       <div class="controls">
-        <label class="model-control">
+        <label class="control">
           <span>Model</span>
           <select id="modelSelect"></select>
+        </label>
+        <label class="control">
+          <span>Thinking</span>
+          <select id="thinkSelect">
+            <option value="false" selected>Off</option>
+            <option value="true">On</option>
+          </select>
         </label>
         <button id="newChatButton" class="secondary" type="button">New chat</button>
       </div>
     </header>
 
     <section id="statusBar" class="status-bar">Connecting…</section>
+
+    <section id="runPanel" class="run-panel" hidden>
+      <strong id="runState">Generating</strong>
+      <span id="runElapsed">0.0 s</span>
+      <span id="runCpu">CPU —</span>
+      <span id="runRam">RAM —</span>
+      <span id="runModelRam">model RAM —</span>
+    </section>
 
     <section id="messages" class="messages" aria-live="polite">
       <div class="empty-state" id="emptyState">
@@ -32,16 +47,26 @@
     </section>
 
     <section id="metrics" class="metrics" hidden>
-      <span id="metricModel">—</span>
-      <span id="metricWall">—</span>
-      <span id="metricLoad">—</span>
-      <span id="metricGeneration">—</span>
-      <span id="metricTps">—</span>
-      <span id="metricRam">—</span>
+      <div class="metrics-title">Last answer</div>
+      <div class="metrics-grid">
+        <span id="metricModel">—</span>
+        <span id="metricMode">—</span>
+        <span id="metricWall">—</span>
+        <span id="metricTotal">—</span>
+        <span id="metricLoad">—</span>
+        <span id="metricPrompt">—</span>
+        <span id="metricGeneration">—</span>
+        <span id="metricTokens">—</span>
+        <span id="metricTps">—</span>
+        <span id="metricCpuWork">—</span>
+        <span id="metricRam">—</span>
+        <span id="metricModelRam">—</span>
+      </div>
     </section>
 
     <form id="chatForm" class="composer">
       <textarea id="promptInput" rows="1" placeholder="Message local model…" autocomplete="off"></textarea>
+      <button id="stopButton" class="stop" type="button" hidden>Stop</button>
       <button id="sendButton" type="submit">Send</button>
     </form>
   </main>
