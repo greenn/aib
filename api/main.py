@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 import httpx
+import psutil
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 load_dotenv()
@@ -15,6 +19,7 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 DEFAULT_MODEL = os.getenv("AIB_DEFAULT_MODEL", "qwen3:4b")
 EMBED_MODEL = os.getenv("AIB_EMBED_MODEL", "nomic-embed-text")
 REQUEST_TIMEOUT = float(os.getenv("AIB_REQUEST_TIMEOUT", "600"))
+UI_DIR = Path(__file__).resolve().parent / "ui"
 
 CONFIGURED_MODELS = [
     {
@@ -42,10 +47,9 @@ CONFIGURED_MODELS = [
 app = FastAPI(
     title="aib",
     description="Local backend for AI models",
-    version="0.1.0",
+    version="0.2.0",
 )
 
-# Development default. The service is bound to 127.0.0.1 by the startup script.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -54,11 +58,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.mount("/ui", StaticFiles(directory=UI_DIR), name="ui")
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1)
+
 
 class ChatRequest(BaseModel):
     prompt: str = Field(min_length=1)
     model: str = DEFAULT_MODEL
     system: str | None = None
+    history: list[ChatMessage] = Field(default_factory=list)
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     keep_alive: str = "10m"
 
@@ -67,6 +79,16 @@ class EmbedRequest(BaseModel):
     input: str | list[str]
     model: str = EMBED_MODEL
     keep_alive: str = "10m"
+
+
+def memory_snapshot() -> dict[str, float]:
+    memory = psutil.virtual_memory()
+    return {
+        "total_gb": round(memory.total / (1024**3), 2),
+        "used_gb": round(memory.used / (1024**3), 2),
+        "available_gb": round(memory.available / (1024**3), 2),
+        "percent": float(memory.percent),
+    }
 
 
 async def ollama_request(method: str, path: str, **kwargs: Any) -> httpx.Response:
@@ -92,8 +114,14 @@ async def root() -> dict[str, str]:
     return {
         "service": "aib",
         "version": app.version,
+        "chat": "/chat",
         "docs": "/docs",
     }
+
+
+@app.get("/chat", response_class=FileResponse)
+async def chat_ui() -> FileResponse:
+    return FileResponse(UI_DIR / "index.html")
 
 
 @app.get("/health")
@@ -111,6 +139,7 @@ async def health() -> dict[str, Any]:
         "version": app.version,
         "default_model": DEFAULT_MODEL,
         "models_path": os.getenv("OLLAMA_MODELS"),
+        "memory": memory_snapshot(),
         "ollama": ollama,
     }
 
@@ -137,22 +166,28 @@ async def models() -> dict[str, Any]:
 
 @app.post("/chat")
 async def chat(request: ChatRequest) -> dict[str, Any]:
+    messages: list[dict[str, str]] = []
+    if request.system:
+        messages.append({"role": "system", "content": request.system})
+    messages.extend(message.model_dump() for message in request.history)
+    messages.append({"role": "user", "content": request.prompt})
+
     payload: dict[str, Any] = {
         "model": request.model,
-        "prompt": request.prompt,
+        "messages": messages,
         "stream": False,
         "keep_alive": request.keep_alive,
         "options": {"temperature": request.temperature},
     }
-    if request.system:
-        payload["system"] = request.system
 
-    response = await ollama_request("POST", "/api/generate", json=payload)
+    response = await ollama_request("POST", "/api/chat", json=payload)
     data = response.json()
+    message = data.get("message") or {}
 
     return {
         "model": data.get("model", request.model),
-        "response": data.get("response", ""),
+        "response": message.get("content", ""),
+        "thinking": message.get("thinking"),
         "done": data.get("done", False),
         "done_reason": data.get("done_reason"),
         "total_duration": data.get("total_duration"),
@@ -161,6 +196,7 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
         "prompt_eval_duration": data.get("prompt_eval_duration"),
         "eval_count": data.get("eval_count"),
         "eval_duration": data.get("eval_duration"),
+        "memory": memory_snapshot(),
     }
 
 
