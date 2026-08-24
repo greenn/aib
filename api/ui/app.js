@@ -35,11 +35,6 @@ function fmtSeconds(value) {
   return `${value.toFixed(value < 10 ? 2 : 1)} s`;
 }
 
-function fmtGb(value, digits = 1) {
-  const n = Number(value);
-  return Number.isFinite(n) ? `${n.toFixed(digits)} GB` : '—';
-}
-
 function addMessage(role, text, pending = false) {
   emptyState.hidden = true;
   const node = document.createElement('div');
@@ -260,6 +255,7 @@ async function sendMessage(prompt) {
 
   const previousHistory = history.slice();
   const selectedModel = modelSelect.value;
+  const thinkingSupported = supportsThinking(selectedModel);
   const thinkEnabled = currentThinkEnabled();
   const controller = new AbortController();
   currentController = controller;
@@ -282,7 +278,7 @@ async function sendMessage(prompt) {
         history: previousHistory,
         temperature: 0.2,
         keep_alive: '30m',
-        think: thinkEnabled
+        think: thinkingSupported ? thinkEnabled : null
       })
     });
 
