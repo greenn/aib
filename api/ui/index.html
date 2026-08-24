@@ -25,6 +25,7 @@
             <option value="true">On</option>
           </select>
         </label>
+        <button id="promptsButton" class="secondary" type="button">Prompts</button>
         <button id="newChatButton" class="secondary" type="button">New chat</button>
       </div>
     </header>
@@ -37,6 +38,42 @@
       <span id="runCpu">CPU —</span>
       <span id="runRam">RAM —</span>
       <span id="runModelRam">model RAM —</span>
+    </section>
+
+    <section id="promptEditor" class="prompt-editor" hidden>
+      <div class="prompt-editor-header">
+        <div>
+          <strong>Pre-prompts</strong>
+          <div class="prompt-help">These instructions are inserted before the conversation. Unsaved edits affect requests from this UI immediately.</div>
+        </div>
+        <button id="closePromptsButton" class="secondary small" type="button">Close</button>
+      </div>
+
+      <div class="prompt-grid">
+        <label class="prompt-card">
+          <span class="prompt-card-title">
+            <input id="useSystemPrompt" type="checkbox" checked>
+            System prompt
+          </span>
+          <textarea id="systemPromptInput" rows="8" spellcheck="false"></textarea>
+          <span class="prompt-help">General behavior and identity rules.</span>
+        </label>
+
+        <label class="prompt-card">
+          <span class="prompt-card-title">
+            <input id="useRuntimePrompt" type="checkbox" checked>
+            Runtime context template
+          </span>
+          <textarea id="runtimePromptInput" rows="8" spellcheck="false"></textarea>
+          <span class="prompt-help">Variables: {model}, {ollama_url}, {models_path}, {aib_version}</span>
+        </label>
+      </div>
+
+      <div class="prompt-actions">
+        <button id="savePromptsButton" type="button">Save local defaults</button>
+        <button id="resetPromptsButton" class="secondary" type="button">Reset repository defaults</button>
+        <span id="promptSaveState" class="prompt-save-state"></span>
+      </div>
     </section>
 
     <section class="workspace">
@@ -61,6 +98,7 @@
       <div class="metrics-grid">
         <span id="metricModel">—</span>
         <span id="metricMode">—</span>
+        <span id="metricPrompts">—</span>
         <span id="metricWall">—</span>
         <span id="metricTotal">—</span>
         <span id="metricLoad">—</span>
