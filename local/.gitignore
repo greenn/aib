@@ -2,3 +2,4 @@ models/
 *.gguf
 *.bin
 *.safetensors
+prompt-config.json
