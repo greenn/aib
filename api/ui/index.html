@@ -39,11 +39,21 @@
       <span id="runModelRam">model RAM —</span>
     </section>
 
-    <section id="messages" class="messages" aria-live="polite">
-      <div class="empty-state" id="emptyState">
-        <h1>Local AI</h1>
-        <p>Choose a model and send a message. Requests stay on this computer.</p>
-      </div>
+    <section class="workspace">
+      <section id="messages" class="messages" aria-live="polite">
+        <div class="empty-state" id="emptyState">
+          <h1>Local AI</h1>
+          <p>Choose a model and send a message. Requests stay on this computer.</p>
+        </div>
+      </section>
+
+      <aside id="reasoningPanel" class="reasoning-panel">
+        <div class="reasoning-header">
+          <strong>Reasoning</strong>
+          <span id="reasoningState">off</span>
+        </div>
+        <div id="reasoningContent" class="reasoning-content">Enable Thinking to show model reasoning here.</div>
+      </aside>
     </section>
 
     <section id="metrics" class="metrics" hidden>
@@ -64,11 +74,13 @@
       </div>
     </section>
 
-    <form id="chatForm" class="composer">
-      <textarea id="promptInput" rows="1" placeholder="Message local model…" autocomplete="off"></textarea>
-      <button id="stopButton" class="stop" type="button" hidden>Stop</button>
-      <button id="sendButton" type="submit">Send</button>
-    </form>
+    <footer class="composer-footer">
+      <form id="chatForm" class="composer">
+        <textarea id="promptInput" rows="1" placeholder="Message local model…" autocomplete="off"></textarea>
+        <button id="stopButton" class="stop" type="button" hidden>Stop</button>
+        <button id="sendButton" type="submit">Send</button>
+      </form>
+    </footer>
   </main>
 
   <script src="/ui/app.js" defer></script>
