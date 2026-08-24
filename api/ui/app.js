@@ -1,5 +1,6 @@
 const modelSelect = document.getElementById('modelSelect');
 const thinkSelect = document.getElementById('thinkSelect');
+const promptsButton = document.getElementById('promptsButton');
 const newChatButton = document.getElementById('newChatButton');
 const statusBar = document.getElementById('statusBar');
 const runPanel = document.getElementById('runPanel');
@@ -8,9 +9,19 @@ const runElapsed = document.getElementById('runElapsed');
 const runCpu = document.getElementById('runCpu');
 const runRam = document.getElementById('runRam');
 const runModelRam = document.getElementById('runModelRam');
+
+const promptEditor = document.getElementById('promptEditor');
+const closePromptsButton = document.getElementById('closePromptsButton');
+const useSystemPrompt = document.getElementById('useSystemPrompt');
+const useRuntimePrompt = document.getElementById('useRuntimePrompt');
+const systemPromptInput = document.getElementById('systemPromptInput');
+const runtimePromptInput = document.getElementById('runtimePromptInput');
+const savePromptsButton = document.getElementById('savePromptsButton');
+const resetPromptsButton = document.getElementById('resetPromptsButton');
+const promptSaveState = document.getElementById('promptSaveState');
+
 const messagesEl = document.getElementById('messages');
 const emptyState = document.getElementById('emptyState');
-const reasoningPanel = document.getElementById('reasoningPanel');
 const reasoningState = document.getElementById('reasoningState');
 const reasoningContent = document.getElementById('reasoningContent');
 const metricsEl = document.getElementById('metrics');
@@ -25,8 +36,8 @@ let currentController = null;
 let runStartedAt = 0;
 let timerId = null;
 let resourcePollId = null;
-let lastResources = null;
 let modelCapabilities = new Map();
+let promptConfigLoaded = false;
 
 function secondsFromNs(value) {
   if (!value) return 0;
@@ -42,16 +53,16 @@ function scrollChatToBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function setReasoning(text, state = null) {
+function setReasoning(text, state = null, placeholder = false) {
   reasoningContent.textContent = text;
+  reasoningContent.dataset.placeholder = placeholder ? 'true' : 'false';
   if (state) reasoningState.textContent = state;
   reasoningContent.scrollTop = reasoningContent.scrollHeight;
 }
 
 function appendReasoning(text) {
   if (!text) return;
-  const placeholder = reasoningContent.dataset.placeholder === 'true';
-  if (placeholder) {
+  if (reasoningContent.dataset.placeholder === 'true') {
     reasoningContent.textContent = '';
     reasoningContent.dataset.placeholder = 'false';
   }
@@ -60,11 +71,10 @@ function appendReasoning(text) {
 }
 
 function resetReasoningForRun(thinkEnabled) {
-  reasoningContent.dataset.placeholder = 'true';
   if (thinkEnabled) {
-    setReasoning('Waiting for reasoning…', 'waiting');
+    setReasoning('Waiting for reasoning…', 'waiting', true);
   } else {
-    setReasoning('Thinking is disabled for this request.', 'off');
+    setReasoning('Thinking is disabled for this request.', 'off', true);
   }
 }
 
@@ -83,42 +93,51 @@ function setStatus(text, kind = '') {
   statusBar.className = `status-bar ${kind}`.trim();
 }
 
-function setBusy(value) {
-  busy = value;
-  sendButton.disabled = value;
-  modelSelect.disabled = value;
-  thinkSelect.disabled = value || !supportsThinking(modelSelect.value);
-  newChatButton.disabled = value;
-  stopButton.hidden = !value;
-  promptInput.disabled = false;
+function setPromptSaveState(text, kind = '') {
+  promptSaveState.textContent = text;
+  promptSaveState.className = `prompt-save-state ${kind}`.trim();
 }
 
 function supportsThinking(model) {
   return Boolean(modelCapabilities.get(model)?.thinking);
 }
 
-function syncThinkingControl() {
-  const supported = supportsThinking(modelSelect.value);
-  if (!supported) thinkSelect.value = 'false';
-  thinkSelect.disabled = busy || !supported;
-  thinkSelect.title = supported ? 'Enable or disable model reasoning mode' : 'This model does not expose a thinking mode';
-
-  if (!busy) {
-    if (!supported || thinkSelect.value !== 'true') {
-      setReasoning('Enable Thinking to show model reasoning here.', 'off');
-    } else {
-      setReasoning('Reasoning will appear here on the next request.', 'ready');
-    }
-  }
-}
-
 function currentThinkEnabled() {
   return supportsThinking(modelSelect.value) && thinkSelect.value === 'true';
 }
 
+function syncThinkingControl() {
+  const supported = supportsThinking(modelSelect.value);
+  if (!supported) thinkSelect.value = 'false';
+  thinkSelect.disabled = busy || !supported;
+  thinkSelect.title = supported
+    ? 'Enable or disable model reasoning mode'
+    : 'This model does not expose a thinking mode';
+
+  if (!busy) {
+    if (!supported || thinkSelect.value !== 'true') {
+      setReasoning('Enable Thinking to show model reasoning here.', 'off', true);
+    } else {
+      setReasoning('Reasoning will appear here on the next request.', 'ready', true);
+    }
+  }
+}
+
+function setBusy(value) {
+  busy = value;
+  sendButton.disabled = value;
+  modelSelect.disabled = value;
+  thinkSelect.disabled = value || !supportsThinking(modelSelect.value);
+  promptsButton.disabled = value;
+  newChatButton.disabled = value;
+  savePromptsButton.disabled = value;
+  resetPromptsButton.disabled = value;
+  stopButton.hidden = !value;
+  promptInput.disabled = false;
+}
+
 function updateLiveResources(data) {
   if (!data) return;
-  lastResources = data;
   const cpu = Number(data.system_cpu_percent);
   const ramUsed = Number(data.system_ram_used_gb);
   const ramTotal = Number(data.system_ram_total_gb);
@@ -128,7 +147,9 @@ function updateLiveResources(data) {
   runRam.textContent = Number.isFinite(ramUsed) && Number.isFinite(ramTotal)
     ? `RAM ${ramUsed.toFixed(1)}/${ramTotal.toFixed(1)} GB`
     : 'RAM —';
-  runModelRam.textContent = Number.isFinite(modelRam) ? `model RAM ${modelRam.toFixed(2)} GB` : 'model RAM —';
+  runModelRam.textContent = Number.isFinite(modelRam)
+    ? `model RAM ${modelRam.toFixed(2)} GB`
+    : 'model RAM —';
 }
 
 async function pollResources() {
@@ -149,8 +170,7 @@ function startRunPanel() {
   runModelRam.textContent = 'model RAM —';
 
   timerId = window.setInterval(() => {
-    const elapsed = (performance.now() - runStartedAt) / 1000;
-    runElapsed.textContent = fmtSeconds(elapsed);
+    runElapsed.textContent = fmtSeconds((performance.now() - runStartedAt) / 1000);
   }, 100);
 
   pollResources();
@@ -172,7 +192,7 @@ function stopRunPanel(finalState = null) {
 function updateMetrics(data, wallSeconds, thinkEnabled) {
   const load = secondsFromNs(data.load_duration);
   const total = secondsFromNs(data.total_duration);
-  const prompt = secondsFromNs(data.prompt_eval_duration);
+  const promptDuration = secondsFromNs(data.prompt_eval_duration);
   const generation = secondsFromNs(data.eval_duration);
   const evalCount = Number(data.eval_count || 0);
   const promptCount = Number(data.prompt_eval_count || 0);
@@ -184,13 +204,19 @@ function updateMetrics(data, wallSeconds, thinkEnabled) {
   const endRam = Number(end.system_ram_used_gb);
   const cpuWork = Number(resources.model_cpu_work_seconds);
   const peakModelRam = Number(resources.model_ram_peak_gb);
+  const layers = data.prompt_layers || {};
+  const layerNames = [];
+  if (layers.use_system_prompt) layerNames.push('system');
+  if (layers.use_runtime_prompt) layerNames.push('runtime');
+  if (layers.request_system_extra) layerNames.push('request-extra');
 
   document.getElementById('metricModel').textContent = `model ${data.model || modelSelect.value}`;
   document.getElementById('metricMode').textContent = `thinking ${thinkEnabled ? 'on' : 'off'}`;
+  document.getElementById('metricPrompts').textContent = `pre-prompts ${layerNames.length ? layerNames.join('+') : 'off'}`;
   document.getElementById('metricWall').textContent = `elapsed ${fmtSeconds(wallSeconds)}`;
   document.getElementById('metricTotal').textContent = `model total ${fmtSeconds(total)}`;
   document.getElementById('metricLoad').textContent = `load ${fmtSeconds(load)}`;
-  document.getElementById('metricPrompt').textContent = `prompt ${fmtSeconds(prompt)} · ${promptCount} tok`;
+  document.getElementById('metricPrompt').textContent = `prompt ${fmtSeconds(promptDuration)} · ${promptCount} tok`;
   document.getElementById('metricGeneration').textContent = `generation ${fmtSeconds(generation)}`;
   document.getElementById('metricTokens').textContent = `output ${evalCount} tok`;
   document.getElementById('metricTps').textContent = tps ? `${tps.toFixed(2)} tok/s` : 'tok/s —';
@@ -231,10 +257,78 @@ async function loadModels() {
   }
 }
 
+async function loadPromptConfig() {
+  try {
+    const model = encodeURIComponent(modelSelect.value || 'qwen3:4b');
+    const response = await fetch(`/prompt-config?model=${model}`, { cache: 'no-store' });
+    if (!response.ok) throw new Error(await response.text());
+    const data = await response.json();
+    systemPromptInput.value = data.current?.system_prompt || '';
+    runtimePromptInput.value = data.current?.runtime_prompt || '';
+    promptConfigLoaded = true;
+    setPromptSaveState(
+      data.local_override_exists ? 'Using saved local defaults.' : 'Using repository defaults.',
+      'ok'
+    );
+  } catch (error) {
+    promptConfigLoaded = false;
+    setPromptSaveState(`Prompt config error: ${error.message}`, 'error');
+  }
+}
+
+async function savePromptConfig() {
+  setPromptSaveState('Saving…');
+  try {
+    const response = await fetch('/prompt-config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_prompt: systemPromptInput.value,
+        runtime_prompt: runtimePromptInput.value
+      })
+    });
+    if (!response.ok) throw new Error(await response.text());
+    promptConfigLoaded = true;
+    setPromptSaveState('Saved to local/prompt-config.json. External API requests now use these defaults.', 'ok');
+  } catch (error) {
+    setPromptSaveState(`Save failed: ${error.message}`, 'error');
+  }
+}
+
+async function resetPromptConfig() {
+  setPromptSaveState('Resetting…');
+  try {
+    const response = await fetch('/prompt-config', { method: 'DELETE' });
+    if (!response.ok) throw new Error(await response.text());
+    await loadPromptConfig();
+    setPromptSaveState('Reset to repository defaults.', 'ok');
+  } catch (error) {
+    setPromptSaveState(`Reset failed: ${error.message}`, 'error');
+  }
+}
+
+function promptOverridesForRequest() {
+  if (!promptConfigLoaded) {
+    return {
+      use_system_prompt: useSystemPrompt.checked,
+      use_runtime_prompt: useRuntimePrompt.checked,
+      system_prompt: null,
+      runtime_prompt: null
+    };
+  }
+  return {
+    use_system_prompt: useSystemPrompt.checked,
+    use_runtime_prompt: useRuntimePrompt.checked,
+    system_prompt: systemPromptInput.value,
+    runtime_prompt: runtimePromptInput.value
+  };
+}
+
 function handleStreamEvent(event, assistantNode, state) {
   if (!event || typeof event !== 'object') return;
 
   if (event.type === 'start') {
+    state.promptLayers = event.prompt_layers || null;
     if (event.resources) updateLiveResources(event.resources);
     return;
   }
@@ -309,7 +403,7 @@ async function sendMessage(prompt) {
 
   addMessage('user', prompt);
   const assistantNode = addMessage('assistant', thinkEnabled ? 'Thinking…' : 'Starting…', true);
-  const state = { answer: '', reasoning: '', thinkingSeen: false, done: null };
+  const state = { answer: '', reasoning: '', thinkingSeen: false, done: null, promptLayers: null };
   startRunPanel();
   setStatus(`Local · ${selectedModel} · running`, 'ok');
 
@@ -324,7 +418,8 @@ async function sendMessage(prompt) {
         history: previousHistory,
         temperature: 0.2,
         keep_alive: '30m',
-        think: thinkingSupported ? thinkEnabled : null
+        think: thinkingSupported ? thinkEnabled : null,
+        ...promptOverridesForRequest()
       })
     });
 
@@ -338,7 +433,6 @@ async function sendMessage(prompt) {
     }
 
     await consumeNdjson(response, assistantNode, state);
-
     if (!state.done) throw new Error('Stream ended before the model reported completion');
 
     const answer = state.answer || '(empty response)';
@@ -350,18 +444,14 @@ async function sendMessage(prompt) {
     const wallSeconds = stopRunPanel('Done');
     updateMetrics(state.done, wallSeconds, thinkEnabled);
     if (thinkEnabled && !state.thinkingSeen) {
-      setReasoning('The model did not return a separate reasoning stream for this request.', 'none');
+      setReasoning('The model did not return a separate reasoning stream for this request.', 'none', true);
     }
     setStatus(`Local · ${selectedModel} · done in ${fmtSeconds(wallSeconds)}`, 'ok');
     scrollChatToBottom();
   } catch (error) {
     if (error.name === 'AbortError') {
       const wallSeconds = stopRunPanel('Stopped');
-      if (!state.answer) {
-        assistantNode.textContent = 'Stopped.';
-      } else {
-        assistantNode.textContent = `${state.answer}\n\n[stopped]`;
-      }
+      assistantNode.textContent = state.answer ? `${state.answer}\n\n[stopped]` : 'Stopped.';
       assistantNode.classList.remove('pending');
       if (thinkEnabled) reasoningState.textContent = 'stopped';
       setStatus(`Stopped after ${fmtSeconds(wallSeconds)}`);
@@ -407,6 +497,17 @@ stopButton.addEventListener('click', () => {
   if (currentController) currentController.abort();
 });
 
+promptsButton.addEventListener('click', () => {
+  promptEditor.hidden = !promptEditor.hidden;
+});
+
+closePromptsButton.addEventListener('click', () => {
+  promptEditor.hidden = true;
+});
+
+savePromptsButton.addEventListener('click', savePromptConfig);
+resetPromptsButton.addEventListener('click', resetPromptConfig);
+
 newChatButton.addEventListener('click', () => {
   history.length = 0;
   messagesEl.querySelectorAll('.message').forEach(node => node.remove());
@@ -428,5 +529,6 @@ thinkSelect.addEventListener('change', () => {
   setStatus(`Local · ${modelSelect.value} · thinking ${currentThinkEnabled() ? 'on' : 'off'}`, 'ok');
 });
 
-loadModels();
-promptInput.focus();
+Promise.all([loadModels(), loadPromptConfig()]).finally(() => {
+  promptInput.focus();
+});
