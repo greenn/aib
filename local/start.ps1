@@ -34,6 +34,45 @@ function Stop-AllOllamaProcesses {
     }
 }
 
+function Test-LocalPort([int]$Port) {
+    $Listener = $null
+    try {
+        $Address = [System.Net.IPAddress]::Parse("127.0.0.1")
+        $Listener = [System.Net.Sockets.TcpListener]::new($Address, $Port)
+        $Listener.Start()
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        if ($null -ne $Listener) {
+            try { $Listener.Stop() } catch {}
+        }
+    }
+}
+
+function Resolve-AibPort {
+    if ($env:AIB_PORT) {
+        $RequestedPort = [int]$env:AIB_PORT
+        if (-not (Test-LocalPort $RequestedPort)) {
+            throw "AIB_PORT=$RequestedPort cannot be bound on 127.0.0.1. Choose another port."
+        }
+        return $RequestedPort
+    }
+
+    # 8181 is preferred for compatibility. Other candidates are deliberately
+    # spread out because Windows/Hyper-V can reserve whole port ranges.
+    $Candidates = @(8181, 8282, 8383, 8484, 8585, 8686, 8787, 8888, 8989, 9080, 9180)
+    foreach ($Candidate in $Candidates) {
+        if (Test-LocalPort $Candidate) {
+            return $Candidate
+        }
+    }
+
+    throw "Could not find a bindable local port for aib."
+}
+
 $env:OLLAMA_MODELS = $ModelsPath
 
 if (-not (Test-Path $VenvPython)) {
@@ -69,10 +108,16 @@ if (-not $OllamaReady) {
     throw "Ollama did not become ready."
 }
 
+$Port = Resolve-AibPort
+$BaseUrl = "http://127.0.0.1:$Port"
+
 Set-Location $RepoRoot
 Write-Host "Ollama PID: $($OllamaProcess.Id)"
-Write-Host "aib API: http://127.0.0.1:8181"
-Write-Host "API docs: http://127.0.0.1:8181/docs"
+Write-Host "aib API: $BaseUrl"
+Write-Host "API docs: $BaseUrl/docs"
+if ($Port -ne 8181) {
+    Write-Host "Note: port 8181 is unavailable/reserved; using $Port instead."
+}
 Write-Host "Press Ctrl+C to stop the API."
 
-& $VenvPython -m uvicorn api.main:app --host 127.0.0.1 --port 8181
+& $VenvPython -m uvicorn api.main:app --host 127.0.0.1 --port $Port
