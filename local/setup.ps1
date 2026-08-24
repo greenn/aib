@@ -58,6 +58,22 @@ function Stop-AllOllamaProcesses {
     }
 }
 
+function Get-InstalledModelNames {
+    try {
+        $Tags = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -TimeoutSec 5
+        return @($Tags.models | ForEach-Object { $_.name })
+    }
+    catch {
+        return @()
+    }
+}
+
+function Test-ModelInstalled([string]$Name, [string[]]$InstalledNames) {
+    if ($InstalledNames -contains $Name) { return $true }
+    if (($Name -notmatch ":") -and ($InstalledNames -contains "$Name`:latest")) { return $true }
+    return $false
+}
+
 Write-Host "aib local setup"
 Write-Host "Repository: $RepoRoot"
 Write-Host "Models:     $ModelsPath"
@@ -150,14 +166,24 @@ Write-Host "Installing API dependencies..."
 Write-Host ""
 Write-Host "Checking initial models in: $ModelsPath"
 $Models = Get-Content $ModelsList | Where-Object { $_.Trim() -and -not $_.Trim().StartsWith("#") }
+$InstalledNames = Get-InstalledModelNames
+
 foreach ($Model in $Models) {
     $Name = $Model.Trim()
     Write-Host ""
+
+    if (Test-ModelInstalled $Name $InstalledNames) {
+        Write-Host "=== $Name already available locally; skipping download ==="
+        continue
+    }
+
     Write-Host "=== ollama pull $Name ==="
     & $OllamaExe pull $Name
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to download model: $Name"
     }
+
+    $InstalledNames = Get-InstalledModelNames
 }
 
 $Bytes = Get-DirectorySizeBytes $ModelsPath
