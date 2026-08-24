@@ -25,6 +25,15 @@ function Resolve-OllamaExecutable {
     return $null
 }
 
+function Stop-AllOllamaProcesses {
+    $Processes = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like "ollama*" }
+    if ($Processes) {
+        Write-Host "Stopping other Ollama desktop/server processes..."
+        $Processes | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
+}
+
 $env:OLLAMA_MODELS = $ModelsPath
 
 if (-not (Test-Path $VenvPython)) {
@@ -32,34 +41,27 @@ if (-not (Test-Path $VenvPython)) {
     exit 1
 }
 
+$OllamaExe = Resolve-OllamaExecutable
+if (-not $OllamaExe) {
+    Write-Host "Ollama is not available. Run .\local\setup.ps1 first."
+    exit 1
+}
+
+# Do not trust an already-running Windows desktop server: Ollama 0.32.x can
+# ignore OLLAMA_MODELS there. Start our own CLI server so J: is guaranteed.
+Stop-AllOllamaProcesses
+Write-Host "Starting Ollama CLI server with model storage: $ModelsPath"
+$OllamaProcess = Start-Process -FilePath $OllamaExe -ArgumentList "serve" -WindowStyle Hidden -PassThru
+
 $OllamaReady = $false
-try {
-    Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/version" -TimeoutSec 2 | Out-Null
-    $OllamaReady = $true
-}
-catch {
-    $OllamaReady = $false
-}
-
-if (-not $OllamaReady) {
-    $OllamaExe = Resolve-OllamaExecutable
-    if (-not $OllamaExe) {
-        Write-Host "Ollama is not available. Run .\local\setup.ps1 first."
-        exit 1
+for ($i = 0; $i -lt 30; $i++) {
+    try {
+        Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/version" -TimeoutSec 2 | Out-Null
+        $OllamaReady = $true
+        break
     }
-
-    Write-Host "Starting Ollama with model storage: $ModelsPath"
-    Start-Process -FilePath $OllamaExe -ArgumentList "serve" -WindowStyle Hidden
-
-    for ($i = 0; $i -lt 30; $i++) {
-        try {
-            Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/version" -TimeoutSec 2 | Out-Null
-            $OllamaReady = $true
-            break
-        }
-        catch {
-            Start-Sleep -Seconds 1
-        }
+    catch {
+        Start-Sleep -Seconds 1
     }
 }
 
@@ -68,6 +70,7 @@ if (-not $OllamaReady) {
 }
 
 Set-Location $RepoRoot
+Write-Host "Ollama PID: $($OllamaProcess.Id)"
 Write-Host "aib API: http://127.0.0.1:8181"
 Write-Host "API docs: http://127.0.0.1:8181/docs"
 Write-Host "Press Ctrl+C to stop the API."
