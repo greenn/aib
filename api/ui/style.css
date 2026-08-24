@@ -14,13 +14,14 @@ body {
 }
 
 button, select, textarea { font: inherit; }
+button:disabled, select:disabled { opacity: .5; cursor: default; }
 
 .app-shell {
-  width: min(980px, calc(100% - 32px));
+  width: min(1080px, calc(100% - 32px));
   margin: 0 auto;
   min-height: 100vh;
   display: grid;
-  grid-template-rows: auto auto 1fr auto auto;
+  grid-template-rows: auto auto auto 1fr auto auto;
 }
 
 .topbar {
@@ -50,7 +51,7 @@ button, select, textarea { font: inherit; }
   gap: 10px;
 }
 
-.model-control {
+.control {
   display: grid;
   gap: 4px;
   font-size: 11px;
@@ -76,6 +77,23 @@ select, .secondary {
 
 .status-bar.ok { color: #2e6d42; }
 .status-bar.error { color: #a33d32; }
+
+.run-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  padding: 9px 12px;
+  margin-bottom: 4px;
+  border: 1px solid #d8d8d2;
+  border-radius: 10px;
+  background: #fff;
+  font-size: 12px;
+  color: #66665f;
+}
+
+.run-panel[hidden] { display: none; }
+.run-panel strong { color: #252525; font-weight: 600; }
 
 .messages {
   min-height: 360px;
@@ -123,29 +141,38 @@ select, .secondary {
   border: 1px solid #e0e0db;
 }
 
-.message.pending {
-  color: #77776f;
-}
+.message.pending { color: #77776f; }
+.message.error { color: #a33d32; border-color: #e1b9b4; }
 
 .metrics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  padding: 10px 0;
+  padding: 10px 0 12px;
   border-top: 1px solid #deded9;
   font-size: 11px;
   color: #6c6c66;
 }
 
-.metrics span:not(:first-child)::before {
-  content: "·";
-  margin-right: 14px;
-  color: #b0b0aa;
+.metrics-title {
+  margin-bottom: 7px;
+  font-weight: 600;
+  color: #343431;
+}
+
+.metrics-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 10px;
+}
+
+.metrics-grid span {
+  border: 1px solid #deded8;
+  background: #fff;
+  border-radius: 7px;
+  padding: 4px 7px;
 }
 
 .composer {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   gap: 10px;
   padding: 14px 0 20px;
   position: sticky;
@@ -167,15 +194,18 @@ textarea {
 
 textarea:focus { border-color: #8d8d86; }
 
-#sendButton {
+#sendButton, #stopButton {
   align-self: end;
   height: 46px;
   min-width: 76px;
-  border: 0;
   border-radius: 13px;
+  cursor: pointer;
+}
+
+#sendButton {
+  border: 0;
   background: #20201f;
   color: white;
-  cursor: pointer;
 }
 
 #sendButton:disabled {
@@ -183,11 +213,20 @@ textarea:focus { border-color: #8d8d86; }
   cursor: default;
 }
 
+#stopButton {
+  border: 1px solid #c8a9a5;
+  background: #fff;
+  color: #8b3830;
+}
+
+#stopButton[hidden] { display: none; }
+
 @media (max-width: 700px) {
-  .app-shell { width: min(100% - 20px, 980px); }
+  .app-shell { width: min(100% - 20px, 1080px); }
   .topbar { align-items: flex-start; }
   .controls { align-items: stretch; flex-direction: column; }
   .message { max-width: 94%; }
-  .composer { grid-template-columns: 1fr; }
-  #sendButton { width: 100%; }
+  .composer { grid-template-columns: 1fr 1fr; }
+  .composer textarea { grid-column: 1 / -1; }
+  #sendButton, #stopButton { width: 100%; }
 }
