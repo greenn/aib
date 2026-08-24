@@ -7,21 +7,24 @@
   color: #1c1c1c;
 }
 
-body {
+html, body {
   margin: 0;
-  min-height: 100vh;
+  height: 100%;
   background: #f7f7f5;
 }
+
+body { overflow: hidden; }
 
 button, select, textarea { font: inherit; }
 button:disabled, select:disabled { opacity: .5; cursor: default; }
 
 .app-shell {
-  width: min(1080px, calc(100% - 32px));
+  width: min(1380px, calc(100% - 32px));
+  height: 100vh;
   margin: 0 auto;
-  min-height: 100vh;
   display: grid;
-  grid-template-rows: auto auto auto 1fr auto auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+  overflow: hidden;
 }
 
 .topbar {
@@ -84,7 +87,7 @@ select, .secondary {
   align-items: center;
   gap: 8px 18px;
   padding: 9px 12px;
-  margin-bottom: 4px;
+  margin-bottom: 8px;
   border: 1px solid #d8d8d2;
   border-radius: 10px;
   background: #fff;
@@ -95,14 +98,25 @@ select, .secondary {
 .run-panel[hidden] { display: none; }
 .run-panel strong { color: #252525; font-weight: 600; }
 
+.workspace {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 16px;
+  overflow: hidden;
+}
+
 .messages {
-  min-height: 360px;
-  padding: 24px 0 32px;
-  overflow: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 20px 4px 24px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .empty-state {
-  min-height: 45vh;
+  min-height: 100%;
   display: grid;
   place-content: center;
   text-align: center;
@@ -121,7 +135,7 @@ select, .secondary {
 }
 
 .message {
-  max-width: 82%;
+  max-width: 84%;
   margin: 0 0 18px;
   padding: 13px 15px;
   border-radius: 14px;
@@ -144,15 +158,53 @@ select, .secondary {
 .message.pending { color: #77776f; }
 .message.error { color: #a33d32; border-color: #e1b9b4; }
 
+.reasoning-panel {
+  min-width: 0;
+  min-height: 0;
+  margin: 4px 0 12px;
+  border: 1px solid #dcdcd6;
+  border-radius: 12px;
+  background: #fff;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.reasoning-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 13px;
+  border-bottom: 1px solid #e4e4de;
+  font-size: 12px;
+}
+
+.reasoning-header strong { font-weight: 650; }
+#reasoningState { color: #77776f; }
+
+.reasoning-content {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+  font-size: 13px;
+  color: #5f5f59;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
 .metrics {
-  padding: 10px 0 12px;
+  padding: 9px 0 10px;
   border-top: 1px solid #deded9;
   font-size: 11px;
   color: #6c6c66;
 }
 
 .metrics-title {
-  margin-bottom: 7px;
+  margin-bottom: 6px;
   font-weight: 600;
   color: #343431;
 }
@@ -160,7 +212,7 @@ select, .secondary {
 .metrics-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px 10px;
+  gap: 6px 9px;
 }
 
 .metrics-grid span {
@@ -170,20 +222,23 @@ select, .secondary {
   padding: 4px 7px;
 }
 
+.composer-footer {
+  border-top: 1px solid #deded9;
+  background: #f7f7f5;
+}
+
 .composer {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 10px;
-  padding: 14px 0 20px;
-  position: sticky;
-  bottom: 0;
-  background: linear-gradient(to top, #f7f7f5 80%, rgba(247,247,245,0));
+  padding: 13px 0 16px;
+  background: #f7f7f5;
 }
 
 textarea {
   width: 100%;
   min-height: 46px;
-  max-height: 180px;
+  max-height: 160px;
   resize: none;
   border: 1px solid #cfcfc9;
   border-radius: 13px;
@@ -221,10 +276,29 @@ textarea:focus { border-color: #8d8d86; }
 
 #stopButton[hidden] { display: none; }
 
-@media (max-width: 700px) {
-  .app-shell { width: min(100% - 20px, 1080px); }
+@media (max-width: 900px) {
+  body { overflow: auto; }
+  .app-shell {
+    width: min(100% - 20px, 1380px);
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+    grid-template-rows: auto auto auto auto auto auto;
+  }
   .topbar { align-items: flex-start; }
   .controls { align-items: stretch; flex-direction: column; }
+  .workspace {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+  .messages {
+    min-height: 420px;
+    max-height: 65vh;
+  }
+  .reasoning-panel {
+    min-height: 220px;
+    max-height: 320px;
+  }
   .message { max-width: 94%; }
   .composer { grid-template-columns: 1fr 1fr; }
   .composer textarea { grid-column: 1 / -1; }
