@@ -21,31 +21,56 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 DEFAULT_MODEL = os.getenv("AIB_DEFAULT_MODEL", "qwen3:4b")
 EMBED_MODEL = os.getenv("AIB_EMBED_MODEL", "nomic-embed-text")
 REQUEST_TIMEOUT = float(os.getenv("AIB_REQUEST_TIMEOUT", "600"))
-UI_DIR = Path(__file__).resolve().parent / "ui"
+
+API_DIR = Path(__file__).resolve().parent
+REPO_ROOT = API_DIR.parent
+UI_DIR = API_DIR / "ui"
+DEFAULT_PROMPTS_PATH = API_DIR / "default_prompts.json"
+LOCAL_PROMPTS_PATH = REPO_ROOT / "local" / "prompt-config.json"
 
 CONFIGURED_MODELS = [
     {
         "name": "qwen3:4b",
         "role": "fast",
+        "developer": "Qwen / Alibaba",
+        "parameters": "4B",
+        "ollama_size": "2.5 GB",
+        "context": "256K",
+        "modalities": ["text"],
         "description": "Fast/default local LLM",
         "thinking": True,
     },
     {
         "name": "qwen3:8b",
         "role": "quality",
+        "developer": "Qwen / Alibaba",
+        "parameters": "8B",
+        "ollama_size": "5.2 GB",
+        "context": "40K",
+        "modalities": ["text"],
         "description": "Higher-quality text model",
         "thinking": True,
     },
     {
         "name": "gemma3:4b",
         "role": "vision",
+        "developer": "Google DeepMind",
+        "parameters": "4B",
+        "ollama_size": "3.3 GB",
+        "context": "128K",
+        "modalities": ["text", "image"],
         "description": "Text and image-capable local model",
         "thinking": False,
     },
     {
         "name": "nomic-embed-text",
         "role": "embedding",
-        "description": "Embeddings and semantic search",
+        "developer": "Nomic AI",
+        "parameters": "137M",
+        "ollama_size": "274 MB",
+        "context": "2K model metadata / 8K configured",
+        "modalities": ["text"],
+        "description": "Embeddings and semantic search; not a chat model",
         "thinking": False,
     },
 ]
@@ -53,7 +78,7 @@ CONFIGURED_MODELS = [
 app = FastAPI(
     title="aib",
     description="Local backend for AI models",
-    version="0.3.0",
+    version="0.4.0",
 )
 
 app.add_middleware(
@@ -75,17 +100,114 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     prompt: str = Field(min_length=1)
     model: str = DEFAULT_MODEL
-    system: str | None = None
     history: list[ChatMessage] = Field(default_factory=list)
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     keep_alive: str = "30m"
     think: bool | None = False
+
+    # aib pre-prompt layers. If an override is null, the locally saved default is used.
+    use_system_prompt: bool = True
+    use_runtime_prompt: bool = True
+    system_prompt: str | None = None
+    runtime_prompt: str | None = None
+
+    # Optional request-specific system instructions, appended after aib defaults.
+    # Kept for compatibility with the original API.
+    system: str | None = None
+
+
+class PromptConfigUpdate(BaseModel):
+    system_prompt: str
+    runtime_prompt: str
 
 
 class EmbedRequest(BaseModel):
     input: str | list[str]
     model: str = EMBED_MODEL
     keep_alive: str = "10m"
+
+
+class SafeFormatDict(dict[str, str]):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def repository_prompt_defaults() -> dict[str, str]:
+    data = read_json(DEFAULT_PROMPTS_PATH)
+    return {
+        "system_prompt": str(data.get("system_prompt", "")),
+        "runtime_prompt": str(data.get("runtime_prompt", "")),
+    }
+
+
+def load_prompt_config() -> dict[str, str]:
+    config = repository_prompt_defaults()
+    local = read_json(LOCAL_PROMPTS_PATH)
+    for key in ("system_prompt", "runtime_prompt"):
+        if key in local and isinstance(local[key], str):
+            config[key] = local[key]
+    return config
+
+
+def save_prompt_config(config: dict[str, str]) -> None:
+    LOCAL_PROMPTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = LOCAL_PROMPTS_PATH.with_suffix(".tmp")
+    with temp_path.open("w", encoding="utf-8") as handle:
+        json.dump(config, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    temp_path.replace(LOCAL_PROMPTS_PATH)
+
+
+def runtime_variables(model: str) -> dict[str, str]:
+    return {
+        "model": model,
+        "ollama_url": OLLAMA_URL,
+        "models_path": os.getenv("OLLAMA_MODELS") or str(REPO_ROOT / "local" / "models"),
+        "aib_version": app.version,
+    }
+
+
+def render_runtime_prompt(template: str, model: str) -> str:
+    return template.format_map(SafeFormatDict(runtime_variables(model)))
+
+
+def prompt_layers(request: ChatRequest) -> tuple[list[str], dict[str, Any]]:
+    defaults = load_prompt_config()
+    parts: list[str] = []
+
+    system_text = request.system_prompt if request.system_prompt is not None else defaults["system_prompt"]
+    runtime_template = request.runtime_prompt if request.runtime_prompt is not None else defaults["runtime_prompt"]
+
+    if request.use_system_prompt and system_text.strip():
+        parts.append(system_text.strip())
+
+    rendered_runtime = ""
+    if request.use_runtime_prompt and runtime_template.strip():
+        rendered_runtime = render_runtime_prompt(runtime_template, request.model).strip()
+        if rendered_runtime:
+            parts.append(rendered_runtime)
+
+    if request.system and request.system.strip():
+        parts.append("Request-specific system instructions:\n" + request.system.strip())
+
+    metadata = {
+        "use_system_prompt": request.use_system_prompt,
+        "use_runtime_prompt": request.use_runtime_prompt,
+        "system_prompt_source": "request" if request.system_prompt is not None else "local-default",
+        "runtime_prompt_source": "request" if request.runtime_prompt is not None else "local-default",
+        "request_system_extra": bool(request.system and request.system.strip()),
+        "rendered_runtime_prompt": rendered_runtime,
+    }
+    return parts, metadata
 
 
 def model_process_snapshot() -> dict[str, Any]:
@@ -150,26 +272,29 @@ def cpu_work_seconds(start: dict[str, Any], end: dict[str, Any]) -> float:
     return round(total, 3)
 
 
-def build_messages(request: ChatRequest) -> list[dict[str, str]]:
+def build_messages(request: ChatRequest) -> tuple[list[dict[str, str]], dict[str, Any]]:
     messages: list[dict[str, str]] = []
-    if request.system:
-        messages.append({"role": "system", "content": request.system})
+    layers, metadata = prompt_layers(request)
+    if layers:
+        messages.append({"role": "system", "content": "\n\n".join(layers)})
+
     messages.extend(message.model_dump() for message in request.history)
     messages.append({"role": "user", "content": request.prompt})
-    return messages
+    return messages, metadata
 
 
-def build_chat_payload(request: ChatRequest, *, stream: bool) -> dict[str, Any]:
+def build_chat_payload(request: ChatRequest, *, stream: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+    messages, prompt_metadata = build_messages(request)
     payload: dict[str, Any] = {
         "model": request.model,
-        "messages": build_messages(request),
+        "messages": messages,
         "stream": stream,
         "keep_alive": request.keep_alive,
         "options": {"temperature": request.temperature},
     }
     if request.think is not None:
         payload["think"] = request.think
-    return payload
+    return payload, prompt_metadata
 
 
 def ndjson(data: dict[str, Any]) -> bytes:
@@ -201,6 +326,7 @@ async def root() -> dict[str, str]:
         "version": app.version,
         "chat": "/chat",
         "docs": "/docs",
+        "prompt_config": "/prompt-config",
     }
 
 
@@ -260,11 +386,59 @@ async def models() -> dict[str, Any]:
     }
 
 
+@app.get("/prompt-config")
+async def get_prompt_config(model: str = DEFAULT_MODEL) -> dict[str, Any]:
+    current = load_prompt_config()
+    defaults = repository_prompt_defaults()
+    return {
+        "current": current,
+        "repository_defaults": defaults,
+        "local_override_exists": LOCAL_PROMPTS_PATH.exists(),
+        "local_override_path": str(LOCAL_PROMPTS_PATH),
+        "runtime_variables": runtime_variables(model),
+        "resolved_runtime_prompt": render_runtime_prompt(current["runtime_prompt"], model),
+        "request_parameters": {
+            "use_system_prompt": "bool; default true",
+            "use_runtime_prompt": "bool; default true",
+            "system_prompt": "string|null; per-request override; null uses saved default",
+            "runtime_prompt": "string|null; per-request template override; null uses saved default",
+            "system": "string|null; optional request-specific extra system instructions",
+        },
+    }
+
+
+@app.put("/prompt-config")
+async def put_prompt_config(update: PromptConfigUpdate) -> dict[str, Any]:
+    config = {
+        "system_prompt": update.system_prompt,
+        "runtime_prompt": update.runtime_prompt,
+    }
+    save_prompt_config(config)
+    return {
+        "saved": True,
+        "path": str(LOCAL_PROMPTS_PATH),
+        "current": config,
+    }
+
+
+@app.delete("/prompt-config")
+async def reset_prompt_config() -> dict[str, Any]:
+    try:
+        LOCAL_PROMPTS_PATH.unlink(missing_ok=True)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "reset": True,
+        "current": repository_prompt_defaults(),
+    }
+
+
 @app.post("/chat")
 async def chat(request: ChatRequest) -> dict[str, Any]:
     started_at = time.perf_counter()
     start_resources = resource_snapshot()
-    response = await ollama_request("POST", "/api/chat", json=build_chat_payload(request, stream=False))
+    payload, prompt_metadata = build_chat_payload(request, stream=False)
+    response = await ollama_request("POST", "/api/chat", json=payload)
     data = response.json()
     message = data.get("message") or {}
     end_resources = resource_snapshot()
@@ -282,6 +456,7 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
         "eval_count": data.get("eval_count"),
         "eval_duration": data.get("eval_duration"),
         "server_wall_seconds": round(time.perf_counter() - started_at, 3),
+        "prompt_layers": prompt_metadata,
         "resources": {
             "start": start_resources,
             "end": end_resources,
@@ -296,7 +471,7 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
 
 @app.post("/chat/stream")
 async def chat_stream(chat_request: ChatRequest, request: Request) -> StreamingResponse:
-    payload = build_chat_payload(chat_request, stream=True)
+    payload, prompt_metadata = build_chat_payload(chat_request, stream=True)
 
     async def generate():
         started_at = time.perf_counter()
@@ -307,6 +482,7 @@ async def chat_stream(chat_request: ChatRequest, request: Request) -> StreamingR
                 "type": "start",
                 "model": chat_request.model,
                 "think": chat_request.think,
+                "prompt_layers": prompt_metadata,
                 "resources": start_resources,
             }
         )
@@ -377,6 +553,7 @@ async def chat_stream(chat_request: ChatRequest, request: Request) -> StreamingR
                     "eval_count": final_data.get("eval_count"),
                     "eval_duration": final_data.get("eval_duration"),
                     "server_wall_seconds": round(time.perf_counter() - started_at, 3),
+                    "prompt_layers": prompt_metadata,
                     "resources": {
                         "start": start_resources,
                         "end": end_resources,
