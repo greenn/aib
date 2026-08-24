@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Literal
 
 import httpx
 import psutil
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -26,28 +28,32 @@ CONFIGURED_MODELS = [
         "name": "qwen3:4b",
         "role": "fast",
         "description": "Fast/default local LLM",
+        "thinking": True,
     },
     {
         "name": "qwen3:8b",
         "role": "quality",
         "description": "Higher-quality text model",
+        "thinking": True,
     },
     {
         "name": "gemma3:4b",
         "role": "vision",
         "description": "Text and image-capable local model",
+        "thinking": False,
     },
     {
         "name": "nomic-embed-text",
         "role": "embedding",
         "description": "Embeddings and semantic search",
+        "thinking": False,
     },
 ]
 
 app = FastAPI(
     title="aib",
     description="Local backend for AI models",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 app.add_middleware(
@@ -72,7 +78,8 @@ class ChatRequest(BaseModel):
     system: str | None = None
     history: list[ChatMessage] = Field(default_factory=list)
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
-    keep_alive: str = "10m"
+    keep_alive: str = "30m"
+    think: bool | None = False
 
 
 class EmbedRequest(BaseModel):
@@ -81,14 +88,92 @@ class EmbedRequest(BaseModel):
     keep_alive: str = "10m"
 
 
-def memory_snapshot() -> dict[str, float]:
+def model_process_snapshot() -> dict[str, Any]:
+    processes: list[dict[str, float | int | str]] = []
+    total_rss = 0
+    total_cpu_seconds = 0.0
+
+    for process in psutil.process_iter(["pid", "name", "memory_info", "cpu_times"]):
+        try:
+            name = (process.info.get("name") or "").lower()
+            if "llama-server" not in name:
+                continue
+
+            memory_info = process.info.get("memory_info")
+            cpu_times = process.info.get("cpu_times")
+            rss = int(memory_info.rss) if memory_info else 0
+            cpu_seconds = float(cpu_times.user + cpu_times.system) if cpu_times else 0.0
+            total_rss += rss
+            total_cpu_seconds += cpu_seconds
+            processes.append(
+                {
+                    "pid": int(process.info["pid"]),
+                    "name": name,
+                    "rss_gb": round(rss / (1024**3), 3),
+                    "cpu_seconds": round(cpu_seconds, 3),
+                }
+            )
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    return {
+        "rss_gb": round(total_rss / (1024**3), 3),
+        "cpu_seconds": round(total_cpu_seconds, 3),
+        "processes": processes,
+    }
+
+
+def resource_snapshot() -> dict[str, Any]:
     memory = psutil.virtual_memory()
     return {
-        "total_gb": round(memory.total / (1024**3), 2),
-        "used_gb": round(memory.used / (1024**3), 2),
-        "available_gb": round(memory.available / (1024**3), 2),
-        "percent": float(memory.percent),
+        "system_ram_total_gb": round(memory.total / (1024**3), 2),
+        "system_ram_used_gb": round(memory.used / (1024**3), 2),
+        "system_ram_available_gb": round(memory.available / (1024**3), 2),
+        "system_ram_percent": float(memory.percent),
+        "system_cpu_percent": float(psutil.cpu_percent(interval=None)),
+        "model": model_process_snapshot(),
     }
+
+
+def cpu_map(snapshot: dict[str, Any]) -> dict[int, float]:
+    return {
+        int(item["pid"]): float(item["cpu_seconds"])
+        for item in snapshot.get("model", {}).get("processes", [])
+    }
+
+
+def cpu_work_seconds(start: dict[str, Any], end: dict[str, Any]) -> float:
+    start_cpu = cpu_map(start)
+    total = 0.0
+    for pid, end_value in cpu_map(end).items():
+        total += max(0.0, end_value - start_cpu.get(pid, 0.0))
+    return round(total, 3)
+
+
+def build_messages(request: ChatRequest) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    if request.system:
+        messages.append({"role": "system", "content": request.system})
+    messages.extend(message.model_dump() for message in request.history)
+    messages.append({"role": "user", "content": request.prompt})
+    return messages
+
+
+def build_chat_payload(request: ChatRequest, *, stream: bool) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": request.model,
+        "messages": build_messages(request),
+        "stream": stream,
+        "keep_alive": request.keep_alive,
+        "options": {"temperature": request.temperature},
+    }
+    if request.think is not None:
+        payload["think"] = request.think
+    return payload
+
+
+def ndjson(data: dict[str, Any]) -> bytes:
+    return (json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
 
 
 async def ollama_request(method: str, path: str, **kwargs: Any) -> httpx.Response:
@@ -133,15 +218,26 @@ async def health() -> dict[str, Any]:
     except HTTPException as exc:
         ollama = {"status": "unavailable", "url": OLLAMA_URL, "detail": exc.detail}
 
+    resources = resource_snapshot()
     return {
         "status": "ok" if ollama["status"] == "ok" else "degraded",
         "service": "aib",
         "version": app.version,
         "default_model": DEFAULT_MODEL,
         "models_path": os.getenv("OLLAMA_MODELS"),
-        "memory": memory_snapshot(),
+        "memory": {
+            "total_gb": resources["system_ram_total_gb"],
+            "used_gb": resources["system_ram_used_gb"],
+            "available_gb": resources["system_ram_available_gb"],
+            "percent": resources["system_ram_percent"],
+        },
         "ollama": ollama,
     }
+
+
+@app.get("/resources")
+async def resources() -> dict[str, Any]:
+    return resource_snapshot()
 
 
 @app.get("/models")
@@ -166,23 +262,12 @@ async def models() -> dict[str, Any]:
 
 @app.post("/chat")
 async def chat(request: ChatRequest) -> dict[str, Any]:
-    messages: list[dict[str, str]] = []
-    if request.system:
-        messages.append({"role": "system", "content": request.system})
-    messages.extend(message.model_dump() for message in request.history)
-    messages.append({"role": "user", "content": request.prompt})
-
-    payload: dict[str, Any] = {
-        "model": request.model,
-        "messages": messages,
-        "stream": False,
-        "keep_alive": request.keep_alive,
-        "options": {"temperature": request.temperature},
-    }
-
-    response = await ollama_request("POST", "/api/chat", json=payload)
+    started_at = time.perf_counter()
+    start_resources = resource_snapshot()
+    response = await ollama_request("POST", "/api/chat", json=build_chat_payload(request, stream=False))
     data = response.json()
     message = data.get("message") or {}
+    end_resources = resource_snapshot()
 
     return {
         "model": data.get("model", request.model),
@@ -196,8 +281,120 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
         "prompt_eval_duration": data.get("prompt_eval_duration"),
         "eval_count": data.get("eval_count"),
         "eval_duration": data.get("eval_duration"),
-        "memory": memory_snapshot(),
+        "server_wall_seconds": round(time.perf_counter() - started_at, 3),
+        "resources": {
+            "start": start_resources,
+            "end": end_resources,
+            "model_ram_peak_gb": max(
+                float(start_resources["model"]["rss_gb"]),
+                float(end_resources["model"]["rss_gb"]),
+            ),
+            "model_cpu_work_seconds": cpu_work_seconds(start_resources, end_resources),
+        },
     }
+
+
+@app.post("/chat/stream")
+async def chat_stream(chat_request: ChatRequest, request: Request) -> StreamingResponse:
+    payload = build_chat_payload(chat_request, stream=True)
+
+    async def generate():
+        started_at = time.perf_counter()
+        start_resources = resource_snapshot()
+        peak_model_ram = float(start_resources["model"]["rss_gb"])
+        yield ndjson(
+            {
+                "type": "start",
+                "model": chat_request.model,
+                "think": chat_request.think,
+                "resources": start_resources,
+            }
+        )
+
+        final_data: dict[str, Any] = {}
+        try:
+            timeout = httpx.Timeout(REQUEST_TIMEOUT, connect=30.0)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream(
+                    "POST",
+                    f"{OLLAMA_URL}/api/chat",
+                    json=payload,
+                ) as response:
+                    if response.status_code >= 400:
+                        body = await response.aread()
+                        yield ndjson(
+                            {
+                                "type": "error",
+                                "detail": body.decode("utf-8", errors="replace"),
+                            }
+                        )
+                        return
+
+                    async for line in response.aiter_lines():
+                        if await request.is_disconnected():
+                            return
+                        if not line:
+                            continue
+
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+
+                        current_resources = resource_snapshot()
+                        peak_model_ram = max(
+                            peak_model_ram,
+                            float(current_resources["model"]["rss_gb"]),
+                        )
+
+                        message = data.get("message") or {}
+                        thinking = message.get("thinking") or ""
+                        content = message.get("content") or ""
+
+                        if thinking:
+                            yield ndjson({"type": "thinking", "text": thinking})
+                        if content:
+                            yield ndjson({"type": "token", "text": content})
+
+                        if data.get("done"):
+                            final_data = data
+                            break
+
+            end_resources = resource_snapshot()
+            peak_model_ram = max(
+                peak_model_ram,
+                float(end_resources["model"]["rss_gb"]),
+            )
+            yield ndjson(
+                {
+                    "type": "done",
+                    "model": final_data.get("model", chat_request.model),
+                    "done_reason": final_data.get("done_reason"),
+                    "total_duration": final_data.get("total_duration"),
+                    "load_duration": final_data.get("load_duration"),
+                    "prompt_eval_count": final_data.get("prompt_eval_count"),
+                    "prompt_eval_duration": final_data.get("prompt_eval_duration"),
+                    "eval_count": final_data.get("eval_count"),
+                    "eval_duration": final_data.get("eval_duration"),
+                    "server_wall_seconds": round(time.perf_counter() - started_at, 3),
+                    "resources": {
+                        "start": start_resources,
+                        "end": end_resources,
+                        "model_ram_peak_gb": round(peak_model_ram, 3),
+                        "model_cpu_work_seconds": cpu_work_seconds(start_resources, end_resources),
+                    },
+                }
+            )
+        except httpx.ConnectError:
+            yield ndjson({"type": "error", "detail": f"Ollama is not available at {OLLAMA_URL}"})
+        except httpx.HTTPError as exc:
+            yield ndjson({"type": "error", "detail": str(exc)})
+
+    return StreamingResponse(
+        generate(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/embed")
