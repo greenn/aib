@@ -77,14 +77,61 @@ The UI provides:
 - streaming output while the model generates;
 - Stop button for the active request;
 - conversational history for the current browser tab;
-- new-chat reset;
+- separate scrollable Reasoning panel;
+- fixed composer footer that does not overlap chat messages;
 - live elapsed time, CPU load, system RAM and model RAM;
 - final elapsed/model/load/prompt/generation times;
 - prompt/output token counts and tokens per second;
 - cumulative model CPU work in core-seconds;
-- system RAM before/after the answer and peak model-process RAM.
+- system RAM before/after the answer and peak model-process RAM;
+- editable System prompt and Runtime context template under the `Prompts` button.
 
 `qwen3:4b` uses Thinking Off by default for faster ordinary chat. Thinking can be enabled manually for tasks where extra reasoning is useful.
+
+## Pre-prompts
+
+`aib` has two built-in instruction layers before the user conversation:
+
+1. **System prompt** — general assistant behavior and identity rules.
+2. **Runtime context** — authoritative facts supplied by the host, such as the selected model, local Ollama runtime and model-storage path.
+
+Repository defaults are stored in:
+
+```text
+api/default_prompts.json
+```
+
+When edited and saved through the UI, local overrides are stored in:
+
+```text
+local/prompt-config.json
+```
+
+The local override file is ignored by Git.
+
+Runtime-template variables:
+
+```text
+{model}
+{ollama_url}
+{models_path}
+{aib_version}
+```
+
+External API requests automatically receive the saved defaults. A caller can change them per request:
+
+```json
+{
+  "prompt": "Who are you?",
+  "model": "qwen3:4b",
+  "use_system_prompt": true,
+  "use_runtime_prompt": true,
+  "system_prompt": null,
+  "runtime_prompt": null
+}
+```
+
+`null` means use the saved local default. Supplying a string overrides that layer for one request. Setting either `use_*` flag to `false` disables that layer for the request. The optional legacy `system` field adds request-specific system instructions after the aib layers.
 
 ## API
 
@@ -93,6 +140,9 @@ Initial endpoints:
 - `GET /health` — service status, memory and Ollama connectivity.
 - `GET /resources` — live local CPU/RAM/model-process resource snapshot.
 - `GET /models` — configured models and their local availability/capabilities.
+- `GET /prompt-config` — current/default prompt configuration and runtime variables.
+- `PUT /prompt-config` — save local System/Runtime defaults.
+- `DELETE /prompt-config` — reset local overrides to repository defaults.
 - `GET /chat` — local browser chat UI.
 - `POST /chat` — non-streaming conversational generation.
 - `POST /chat/stream` — NDJSON streaming conversational generation.
