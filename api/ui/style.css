@@ -23,7 +23,7 @@ button:disabled, select:disabled { opacity: .5; cursor: default; }
   height: 100vh;
   margin: 0 auto;
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto;
   overflow: hidden;
 }
 
@@ -71,6 +71,7 @@ select, .secondary {
 }
 
 .secondary { cursor: pointer; }
+.secondary.small { height: 32px; }
 
 .status-bar {
   padding: 9px 0;
@@ -97,6 +98,90 @@ select, .secondary {
 
 .run-panel[hidden] { display: none; }
 .run-panel strong { color: #252525; font-weight: 600; }
+
+.prompt-editor {
+  max-height: 360px;
+  overflow-y: auto;
+  margin: 0 0 10px;
+  padding: 12px;
+  border: 1px solid #d8d8d2;
+  border-radius: 12px;
+  background: #fff;
+  scrollbar-gutter: stable;
+}
+
+.prompt-editor[hidden] { display: none; }
+
+.prompt-editor-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.prompt-editor-header strong { font-size: 13px; }
+.prompt-help { font-size: 11px; line-height: 1.4; color: #77776f; }
+
+.prompt-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.prompt-card {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.prompt-card-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #343431;
+}
+
+.prompt-card input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.prompt-card textarea {
+  min-height: 150px;
+  max-height: 230px;
+  resize: vertical;
+  border-radius: 9px;
+  padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.prompt-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 11px;
+}
+
+#savePromptsButton {
+  height: 36px;
+  border: 0;
+  border-radius: 9px;
+  padding: 0 13px;
+  background: #20201f;
+  color: white;
+  cursor: pointer;
+}
+
+.prompt-save-state { font-size: 11px; color: #6b6b65; }
+.prompt-save-state.ok { color: #2e6d42; }
+.prompt-save-state.error { color: #a33d32; }
 
 .workspace {
   min-height: 0;
@@ -283,22 +368,19 @@ textarea:focus { border-color: #8d8d86; }
     height: auto;
     min-height: 100vh;
     overflow: visible;
-    grid-template-rows: auto auto auto auto auto auto;
+    grid-template-rows: auto;
   }
   .topbar { align-items: flex-start; }
   .controls { align-items: stretch; flex-direction: column; }
+  .prompt-grid { grid-template-columns: 1fr; }
+  .prompt-editor { max-height: none; }
   .workspace {
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(420px, 65vh) 220px;
     overflow: visible;
   }
-  .messages {
-    min-height: 420px;
-    max-height: 65vh;
-  }
-  .reasoning-panel {
-    min-height: 220px;
-    max-height: 320px;
-  }
+  .messages { min-height: 0; max-height: none; }
+  .reasoning-panel { min-height: 0; max-height: none; }
   .message { max-width: 94%; }
   .composer { grid-template-columns: 1fr 1fr; }
   .composer textarea { grid-column: 1 / -1; }
