@@ -53,13 +53,16 @@ Start `aib`:
 powershell -ExecutionPolicy Bypass -File .\local\start.ps1
 ```
 
-Check:
+The startup script prefers port `8181`. If Windows has reserved or blocked it, `aib` automatically selects another bindable local port and prints the actual URL.
+
+Typical output:
 
 ```text
-http://127.0.0.1:8181/health
-http://127.0.0.1:8181/models
-http://127.0.0.1:8181/docs
+aib API: http://127.0.0.1:8181
+API docs: http://127.0.0.1:8181/docs
 ```
+
+Use the URLs printed by `start.ps1`.
 
 ## API
 
