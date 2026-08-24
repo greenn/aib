@@ -10,6 +10,9 @@ const runRam = document.getElementById('runRam');
 const runModelRam = document.getElementById('runModelRam');
 const messagesEl = document.getElementById('messages');
 const emptyState = document.getElementById('emptyState');
+const reasoningPanel = document.getElementById('reasoningPanel');
+const reasoningState = document.getElementById('reasoningState');
+const reasoningContent = document.getElementById('reasoningContent');
 const metricsEl = document.getElementById('metrics');
 const chatForm = document.getElementById('chatForm');
 const promptInput = document.getElementById('promptInput');
@@ -35,13 +38,43 @@ function fmtSeconds(value) {
   return `${value.toFixed(value < 10 ? 2 : 1)} s`;
 }
 
+function scrollChatToBottom() {
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function setReasoning(text, state = null) {
+  reasoningContent.textContent = text;
+  if (state) reasoningState.textContent = state;
+  reasoningContent.scrollTop = reasoningContent.scrollHeight;
+}
+
+function appendReasoning(text) {
+  if (!text) return;
+  const placeholder = reasoningContent.dataset.placeholder === 'true';
+  if (placeholder) {
+    reasoningContent.textContent = '';
+    reasoningContent.dataset.placeholder = 'false';
+  }
+  reasoningContent.textContent += text;
+  reasoningContent.scrollTop = reasoningContent.scrollHeight;
+}
+
+function resetReasoningForRun(thinkEnabled) {
+  reasoningContent.dataset.placeholder = 'true';
+  if (thinkEnabled) {
+    setReasoning('Waiting for reasoning…', 'waiting');
+  } else {
+    setReasoning('Thinking is disabled for this request.', 'off');
+  }
+}
+
 function addMessage(role, text, pending = false) {
   emptyState.hidden = true;
   const node = document.createElement('div');
   node.className = `message ${role}${pending ? ' pending' : ''}`;
   node.textContent = text;
   messagesEl.appendChild(node);
-  node.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  scrollChatToBottom();
   return node;
 }
 
@@ -69,6 +102,14 @@ function syncThinkingControl() {
   if (!supported) thinkSelect.value = 'false';
   thinkSelect.disabled = busy || !supported;
   thinkSelect.title = supported ? 'Enable or disable model reasoning mode' : 'This model does not expose a thinking mode';
+
+  if (!busy) {
+    if (!supported || thinkSelect.value !== 'true') {
+      setReasoning('Enable Thinking to show model reasoning here.', 'off');
+    } else {
+      setReasoning('Reasoning will appear here on the next request.', 'ready');
+    }
+  }
 }
 
 function currentThinkEnabled() {
@@ -200,6 +241,9 @@ function handleStreamEvent(event, assistantNode, state) {
 
   if (event.type === 'thinking') {
     state.thinkingSeen = true;
+    state.reasoning += event.text || '';
+    appendReasoning(event.text || '');
+    reasoningState.textContent = 'thinking';
     if (!state.answer) {
       assistantNode.textContent = 'Thinking…';
       assistantNode.classList.add('pending');
@@ -213,12 +257,13 @@ function handleStreamEvent(event, assistantNode, state) {
     assistantNode.textContent = state.answer || 'Generating…';
     assistantNode.classList.remove('pending');
     runState.textContent = 'Generating';
-    assistantNode.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    scrollChatToBottom();
     return;
   }
 
   if (event.type === 'done') {
     state.done = event;
+    if (state.thinkingSeen) reasoningState.textContent = 'done';
     return;
   }
 
@@ -260,10 +305,11 @@ async function sendMessage(prompt) {
   const controller = new AbortController();
   currentController = controller;
   setBusy(true);
+  resetReasoningForRun(thinkEnabled);
 
   addMessage('user', prompt);
   const assistantNode = addMessage('assistant', thinkEnabled ? 'Thinking…' : 'Starting…', true);
-  const state = { answer: '', thinkingSeen: false, done: null };
+  const state = { answer: '', reasoning: '', thinkingSeen: false, done: null };
   startRunPanel();
   setStatus(`Local · ${selectedModel} · running`, 'ok');
 
@@ -303,7 +349,11 @@ async function sendMessage(prompt) {
 
     const wallSeconds = stopRunPanel('Done');
     updateMetrics(state.done, wallSeconds, thinkEnabled);
+    if (thinkEnabled && !state.thinkingSeen) {
+      setReasoning('The model did not return a separate reasoning stream for this request.', 'none');
+    }
     setStatus(`Local · ${selectedModel} · done in ${fmtSeconds(wallSeconds)}`, 'ok');
+    scrollChatToBottom();
   } catch (error) {
     if (error.name === 'AbortError') {
       const wallSeconds = stopRunPanel('Stopped');
@@ -313,14 +363,17 @@ async function sendMessage(prompt) {
         assistantNode.textContent = `${state.answer}\n\n[stopped]`;
       }
       assistantNode.classList.remove('pending');
+      if (thinkEnabled) reasoningState.textContent = 'stopped';
       setStatus(`Stopped after ${fmtSeconds(wallSeconds)}`);
     } else {
       stopRunPanel('Error');
       assistantNode.textContent = `Error: ${error.message}`;
       assistantNode.classList.remove('pending');
       assistantNode.classList.add('error');
+      if (thinkEnabled) reasoningState.textContent = 'error';
       setStatus('Request failed', 'error');
     }
+    scrollChatToBottom();
   } finally {
     currentController = null;
     setBusy(false);
@@ -347,7 +400,7 @@ promptInput.addEventListener('keydown', event => {
 
 promptInput.addEventListener('input', () => {
   promptInput.style.height = 'auto';
-  promptInput.style.height = `${Math.min(promptInput.scrollHeight, 180)}px`;
+  promptInput.style.height = `${Math.min(promptInput.scrollHeight, 160)}px`;
 });
 
 stopButton.addEventListener('click', () => {
@@ -360,6 +413,7 @@ newChatButton.addEventListener('click', () => {
   emptyState.hidden = false;
   metricsEl.hidden = true;
   runPanel.hidden = true;
+  syncThinkingControl();
   setStatus(`Local · ${modelSelect.value}`, 'ok');
   promptInput.focus();
 });
@@ -370,6 +424,7 @@ modelSelect.addEventListener('change', () => {
 });
 
 thinkSelect.addEventListener('change', () => {
+  syncThinkingControl();
   setStatus(`Local · ${modelSelect.value} · thinking ${currentThinkEnabled() ? 'on' : 'off'}`, 'ok');
 });
 
