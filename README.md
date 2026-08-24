@@ -73,22 +73,29 @@ http://127.0.0.1:<port>/chat
 The UI provides:
 
 - installed chat-model selector;
+- Thinking On/Off for models that support reasoning;
+- streaming output while the model generates;
+- Stop button for the active request;
 - conversational history for the current browser tab;
 - new-chat reset;
-- response wall time;
-- model load time;
-- generation time;
-- tokens per second;
-- current system RAM usage.
+- live elapsed time, CPU load, system RAM and model RAM;
+- final elapsed/model/load/prompt/generation times;
+- prompt/output token counts and tokens per second;
+- cumulative model CPU work in core-seconds;
+- system RAM before/after the answer and peak model-process RAM.
+
+`qwen3:4b` uses Thinking Off by default for faster ordinary chat. Thinking can be enabled manually for tasks where extra reasoning is useful.
 
 ## API
 
 Initial endpoints:
 
 - `GET /health` — service status, memory and Ollama connectivity.
-- `GET /models` — configured models and their local availability.
+- `GET /resources` — live local CPU/RAM/model-process resource snapshot.
+- `GET /models` — configured models and their local availability/capabilities.
 - `GET /chat` — local browser chat UI.
-- `POST /chat` — conversational text generation through a selected local model.
+- `POST /chat` — non-streaming conversational generation.
+- `POST /chat/stream` — NDJSON streaming conversational generation.
 - `POST /embed` — embeddings through `nomic-embed-text`.
 
 Default model: `qwen3:4b`.
