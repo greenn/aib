@@ -78,7 +78,7 @@ CONFIGURED_MODELS = [
 app = FastAPI(
     title="aib",
     description="Local backend for AI models",
-    version="0.4.0",
+    version="0.5.0",
 )
 
 app.add_middleware(
@@ -105,14 +105,19 @@ class ChatRequest(BaseModel):
     keep_alive: str = "30m"
     think: bool | None = False
 
-    # aib pre-prompt layers. If an override is null, the locally saved default is used.
+    # Prompt preset controls which aib-owned pre-prompt layer is used.
+    # general = repository defaults; custom = locally saved/editable prompts;
+    # raw = no aib system/runtime prompt at all.
+    prompt_preset: Literal["general", "custom", "raw"] = "general"
+
+    # Per-request switches/overrides. Raw preset always disables these aib layers.
     use_system_prompt: bool = True
     use_runtime_prompt: bool = True
     system_prompt: str | None = None
     runtime_prompt: str | None = None
 
-    # Optional request-specific system instructions, appended after aib defaults.
-    # Kept for compatibility with the original API.
+    # Explicit caller-owned extra system instructions. This is not an aib preset layer.
+    # If omitted in raw mode, the model receives no system message from aib/caller.
     system: str | None = None
 
 
@@ -180,32 +185,59 @@ def render_runtime_prompt(template: str, model: str) -> str:
     return template.format_map(SafeFormatDict(runtime_variables(model)))
 
 
+def preset_prompt_config(preset: str) -> dict[str, str]:
+    if preset == "general":
+        return repository_prompt_defaults()
+    if preset == "custom":
+        return load_prompt_config()
+    return {"system_prompt": "", "runtime_prompt": ""}
+
+
 def prompt_layers(request: ChatRequest) -> tuple[list[str], dict[str, Any]]:
-    defaults = load_prompt_config()
+    preset = request.prompt_preset
+    base = preset_prompt_config(preset)
     parts: list[str] = []
 
-    system_text = request.system_prompt if request.system_prompt is not None else defaults["system_prompt"]
-    runtime_template = request.runtime_prompt if request.runtime_prompt is not None else defaults["runtime_prompt"]
+    # Raw means no aib-owned pre-prompts, even if overrides were supplied.
+    aib_prompts_enabled = preset != "raw"
+    use_system = aib_prompts_enabled and request.use_system_prompt
+    use_runtime = aib_prompts_enabled and request.use_runtime_prompt
 
-    if request.use_system_prompt and system_text.strip():
+    system_text = request.system_prompt if request.system_prompt is not None else base["system_prompt"]
+    runtime_template = request.runtime_prompt if request.runtime_prompt is not None else base["runtime_prompt"]
+
+    if use_system and system_text.strip():
         parts.append(system_text.strip())
 
     rendered_runtime = ""
-    if request.use_runtime_prompt and runtime_template.strip():
+    if use_runtime and runtime_template.strip():
         rendered_runtime = render_runtime_prompt(runtime_template, request.model).strip()
         if rendered_runtime:
             parts.append(rendered_runtime)
 
+    # Explicit caller-owned system instructions are intentionally independent
+    # from the preset. In raw mode, omit `system` too if a truly empty system
+    # message is desired.
     if request.system and request.system.strip():
         parts.append("Request-specific system instructions:\n" + request.system.strip())
 
     metadata = {
-        "use_system_prompt": request.use_system_prompt,
-        "use_runtime_prompt": request.use_runtime_prompt,
-        "system_prompt_source": "request" if request.system_prompt is not None else "local-default",
-        "runtime_prompt_source": "request" if request.runtime_prompt is not None else "local-default",
+        "preset": preset,
+        "use_system_prompt": use_system,
+        "use_runtime_prompt": use_runtime,
+        "system_prompt_source": (
+            "disabled-by-raw"
+            if preset == "raw"
+            else "request" if request.system_prompt is not None else preset
+        ),
+        "runtime_prompt_source": (
+            "disabled-by-raw"
+            if preset == "raw"
+            else "request" if request.runtime_prompt is not None else preset
+        ),
         "request_system_extra": bool(request.system and request.system.strip()),
         "rendered_runtime_prompt": rendered_runtime,
+        "system_message_present": bool(parts),
     }
     return parts, metadata
 
@@ -388,21 +420,45 @@ async def models() -> dict[str, Any]:
 
 @app.get("/prompt-config")
 async def get_prompt_config(model: str = DEFAULT_MODEL) -> dict[str, Any]:
-    current = load_prompt_config()
-    defaults = repository_prompt_defaults()
+    custom = load_prompt_config()
+    general = repository_prompt_defaults()
     return {
-        "current": current,
-        "repository_defaults": defaults,
+        "current": custom,
+        "repository_defaults": general,
+        "presets": {
+            "general": {
+                "label": "General",
+                "description": "Repository system + runtime prompts.",
+                "system_prompt": general["system_prompt"],
+                "runtime_prompt": general["runtime_prompt"],
+                "aib_prompt_layers": True,
+            },
+            "custom": {
+                "label": "Custom",
+                "description": "Locally saved/editable system + runtime prompts.",
+                "system_prompt": custom["system_prompt"],
+                "runtime_prompt": custom["runtime_prompt"],
+                "aib_prompt_layers": True,
+            },
+            "raw": {
+                "label": "Raw · no aib prompts",
+                "description": "No aib system/runtime prompt is added. Model weights and Ollama chat template still remain.",
+                "system_prompt": "",
+                "runtime_prompt": "",
+                "aib_prompt_layers": False,
+            },
+        },
         "local_override_exists": LOCAL_PROMPTS_PATH.exists(),
         "local_override_path": str(LOCAL_PROMPTS_PATH),
         "runtime_variables": runtime_variables(model),
-        "resolved_runtime_prompt": render_runtime_prompt(current["runtime_prompt"], model),
+        "resolved_runtime_prompt": render_runtime_prompt(custom["runtime_prompt"], model),
         "request_parameters": {
-            "use_system_prompt": "bool; default true",
-            "use_runtime_prompt": "bool; default true",
-            "system_prompt": "string|null; per-request override; null uses saved default",
-            "runtime_prompt": "string|null; per-request template override; null uses saved default",
-            "system": "string|null; optional request-specific extra system instructions",
+            "prompt_preset": "general|custom|raw; default general",
+            "use_system_prompt": "bool; applies to general/custom; raw always disables aib system prompt",
+            "use_runtime_prompt": "bool; applies to general/custom; raw always disables aib runtime prompt",
+            "system_prompt": "string|null; per-request override for general/custom",
+            "runtime_prompt": "string|null; per-request template override for general/custom",
+            "system": "string|null; explicit caller-owned extra system instructions; independent of preset",
         },
     }
 
