@@ -335,7 +335,9 @@ def ndjson(data: dict[str, Any]) -> bytes:
 
 async def ollama_request(method: str, path: str, **kwargs: Any) -> httpx.Response:
     try:
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        # Ollama is always local. On Windows, httpx may otherwise honour a
+        # system proxy rule for 127.0.0.1 and receive a misleading HTTP 502.
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, trust_env=False) as client:
             response = await client.request(method, f"{OLLAMA_URL}{path}", **kwargs)
             response.raise_for_status()
             return response
