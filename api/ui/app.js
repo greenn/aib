@@ -1,4 +1,5 @@
 const modelSelect = document.getElementById('modelSelect');
+const presetSelect = document.getElementById('presetSelect');
 const thinkSelect = document.getElementById('thinkSelect');
 const promptsButton = document.getElementById('promptsButton');
 const newChatButton = document.getElementById('newChatButton');
@@ -106,6 +107,15 @@ function currentThinkEnabled() {
   return supportsThinking(modelSelect.value) && thinkSelect.value === 'true';
 }
 
+function activePreset() {
+  return presetSelect.value || 'general';
+}
+
+function presetLabel() {
+  const option = presetSelect.options[presetSelect.selectedIndex];
+  return option ? option.textContent : activePreset();
+}
+
 function syncThinkingControl() {
   const supported = supportsThinking(modelSelect.value);
   if (!supported) thinkSelect.value = 'false';
@@ -123,10 +133,27 @@ function syncThinkingControl() {
   }
 }
 
+function syncPresetControl() {
+  const isCustom = activePreset() === 'custom';
+  const isRaw = activePreset() === 'raw';
+
+  useSystemPrompt.disabled = busy || !isCustom;
+  useRuntimePrompt.disabled = busy || !isCustom;
+
+  if (isRaw) {
+    promptsButton.title = 'Raw mode adds no aib system/runtime prompts. Prompts opens the Custom preset editor.';
+  } else if (isCustom) {
+    promptsButton.title = 'Edit the active Custom prompt preset';
+  } else {
+    promptsButton.title = 'Edit the Custom preset. General uses repository defaults.';
+  }
+}
+
 function setBusy(value) {
   busy = value;
   sendButton.disabled = value;
   modelSelect.disabled = value;
+  presetSelect.disabled = value;
   thinkSelect.disabled = value || !supportsThinking(modelSelect.value);
   promptsButton.disabled = value;
   newChatButton.disabled = value;
@@ -134,6 +161,7 @@ function setBusy(value) {
   resetPromptsButton.disabled = value;
   stopButton.hidden = !value;
   promptInput.disabled = false;
+  syncPresetControl();
 }
 
 function updateLiveResources(data) {
@@ -209,10 +237,13 @@ function updateMetrics(data, wallSeconds, thinkEnabled) {
   if (layers.use_system_prompt) layerNames.push('system');
   if (layers.use_runtime_prompt) layerNames.push('runtime');
   if (layers.request_system_extra) layerNames.push('request-extra');
+  const preset = layers.preset || activePreset();
 
   document.getElementById('metricModel').textContent = `model ${data.model || modelSelect.value}`;
   document.getElementById('metricMode').textContent = `thinking ${thinkEnabled ? 'on' : 'off'}`;
-  document.getElementById('metricPrompts').textContent = `pre-prompts ${layerNames.length ? layerNames.join('+') : 'off'}`;
+  document.getElementById('metricPrompts').textContent = preset === 'raw'
+    ? 'preset raw · aib prompts off'
+    : `preset ${preset} · ${layerNames.length ? layerNames.join('+') : 'aib prompts off'}`;
   document.getElementById('metricWall').textContent = `elapsed ${fmtSeconds(wallSeconds)}`;
   document.getElementById('metricTotal').textContent = `model total ${fmtSeconds(total)}`;
   document.getElementById('metricLoad').textContent = `load ${fmtSeconds(load)}`;
@@ -251,7 +282,7 @@ async function loadModels() {
 
     if (!configured.length) throw new Error('No chat models are available');
     syncThinkingControl();
-    setStatus(`Local · ${configured.length} chat models available`, 'ok');
+    setStatus(`Local · ${configured.length} chat models available · ${presetLabel()}`, 'ok');
   } catch (error) {
     setStatus(`Model check failed: ${error.message}`, 'error');
   }
@@ -267,7 +298,9 @@ async function loadPromptConfig() {
     runtimePromptInput.value = data.current?.runtime_prompt || '';
     promptConfigLoaded = true;
     setPromptSaveState(
-      data.local_override_exists ? 'Using saved local defaults.' : 'Using repository defaults.',
+      data.local_override_exists
+        ? 'Custom preset loaded from local/prompt-config.json.'
+        : 'Custom currently matches General repository defaults.',
       'ok'
     );
   } catch (error) {
@@ -289,7 +322,7 @@ async function savePromptConfig() {
     });
     if (!response.ok) throw new Error(await response.text());
     promptConfigLoaded = true;
-    setPromptSaveState('Saved to local/prompt-config.json. External API requests now use these defaults.', 'ok');
+    setPromptSaveState('Custom preset saved to local/prompt-config.json.', 'ok');
   } catch (error) {
     setPromptSaveState(`Save failed: ${error.message}`, 'error');
   }
@@ -301,22 +334,47 @@ async function resetPromptConfig() {
     const response = await fetch('/prompt-config', { method: 'DELETE' });
     if (!response.ok) throw new Error(await response.text());
     await loadPromptConfig();
-    setPromptSaveState('Reset to repository defaults.', 'ok');
+    setPromptSaveState('Custom reset to General repository prompts.', 'ok');
   } catch (error) {
     setPromptSaveState(`Reset failed: ${error.message}`, 'error');
   }
 }
 
 function promptOverridesForRequest() {
+  const preset = activePreset();
+
+  if (preset === 'raw') {
+    return {
+      prompt_preset: 'raw',
+      use_system_prompt: false,
+      use_runtime_prompt: false,
+      system_prompt: null,
+      runtime_prompt: null
+    };
+  }
+
+  if (preset === 'general') {
+    return {
+      prompt_preset: 'general',
+      use_system_prompt: true,
+      use_runtime_prompt: true,
+      system_prompt: null,
+      runtime_prompt: null
+    };
+  }
+
   if (!promptConfigLoaded) {
     return {
+      prompt_preset: 'custom',
       use_system_prompt: useSystemPrompt.checked,
       use_runtime_prompt: useRuntimePrompt.checked,
       system_prompt: null,
       runtime_prompt: null
     };
   }
+
   return {
+    prompt_preset: 'custom',
     use_system_prompt: useSystemPrompt.checked,
     use_runtime_prompt: useRuntimePrompt.checked,
     system_prompt: systemPromptInput.value,
@@ -394,6 +452,7 @@ async function sendMessage(prompt) {
 
   const previousHistory = history.slice();
   const selectedModel = modelSelect.value;
+  const selectedPreset = activePreset();
   const thinkingSupported = supportsThinking(selectedModel);
   const thinkEnabled = currentThinkEnabled();
   const controller = new AbortController();
@@ -405,7 +464,7 @@ async function sendMessage(prompt) {
   const assistantNode = addMessage('assistant', thinkEnabled ? 'Thinking…' : 'Starting…', true);
   const state = { answer: '', reasoning: '', thinkingSeen: false, done: null, promptLayers: null };
   startRunPanel();
-  setStatus(`Local · ${selectedModel} · running`, 'ok');
+  setStatus(`Local · ${selectedModel} · ${selectedPreset} · running`, 'ok');
 
   try {
     const response = await fetch('/chat/stream', {
@@ -446,7 +505,7 @@ async function sendMessage(prompt) {
     if (thinkEnabled && !state.thinkingSeen) {
       setReasoning('The model did not return a separate reasoning stream for this request.', 'none', true);
     }
-    setStatus(`Local · ${selectedModel} · done in ${fmtSeconds(wallSeconds)}`, 'ok');
+    setStatus(`Local · ${selectedModel} · ${selectedPreset} · done in ${fmtSeconds(wallSeconds)}`, 'ok');
     scrollChatToBottom();
   } catch (error) {
     if (error.name === 'AbortError') {
@@ -468,6 +527,7 @@ async function sendMessage(prompt) {
     currentController = null;
     setBusy(false);
     syncThinkingControl();
+    syncPresetControl();
     promptInput.focus();
   }
 }
@@ -515,20 +575,36 @@ newChatButton.addEventListener('click', () => {
   metricsEl.hidden = true;
   runPanel.hidden = true;
   syncThinkingControl();
-  setStatus(`Local · ${modelSelect.value}`, 'ok');
+  syncPresetControl();
+  setStatus(`Local · ${modelSelect.value} · ${activePreset()}`, 'ok');
   promptInput.focus();
 });
 
 modelSelect.addEventListener('change', () => {
   syncThinkingControl();
-  setStatus(`Local · ${modelSelect.value}`, 'ok');
+  setStatus(`Local · ${modelSelect.value} · ${activePreset()}`, 'ok');
+});
+
+presetSelect.addEventListener('change', () => {
+  syncPresetControl();
+  const preset = activePreset();
+  if (preset === 'raw') {
+    setStatus(`Local · ${modelSelect.value} · raw · no aib prompts`, 'ok');
+  } else {
+    setStatus(`Local · ${modelSelect.value} · ${preset}`, 'ok');
+  }
 });
 
 thinkSelect.addEventListener('change', () => {
   syncThinkingControl();
-  setStatus(`Local · ${modelSelect.value} · thinking ${currentThinkEnabled() ? 'on' : 'off'}`, 'ok');
+  setStatus(
+    `Local · ${modelSelect.value} · ${activePreset()} · thinking ${currentThinkEnabled() ? 'on' : 'off'}`,
+    'ok'
+  );
 });
 
+syncPresetControl();
 Promise.all([loadModels(), loadPromptConfig()]).finally(() => {
+  syncPresetControl();
   promptInput.focus();
 });
