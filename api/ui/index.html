@@ -19,6 +19,14 @@
           <select id="modelSelect"></select>
         </label>
         <label class="control">
+          <span>Prompt preset</span>
+          <select id="presetSelect">
+            <option value="general" selected>General</option>
+            <option value="custom">Custom</option>
+            <option value="raw">Raw · no aib prompts</option>
+          </select>
+        </label>
+        <label class="control">
           <span>Thinking</span>
           <select id="thinkSelect">
             <option value="false" selected>Off</option>
@@ -43,8 +51,9 @@
     <section id="promptEditor" class="prompt-editor" hidden>
       <div class="prompt-editor-header">
         <div>
-          <strong>Pre-prompts</strong>
-          <div class="prompt-help">These instructions are inserted before the conversation. Unsaved edits affect requests from this UI immediately.</div>
+          <strong>Custom preset</strong>
+          <div class="prompt-help">Edit the locally saved System prompt and Runtime context used by the Custom preset. General stays as the repository baseline. Raw adds no aib system/runtime prompt.</div>
+          <div class="prompt-help">Raw does not remove behavior learned into model weights or Ollama's chat template.</div>
         </div>
         <button id="closePromptsButton" class="secondary small" type="button">Close</button>
       </div>
@@ -56,7 +65,7 @@
             System prompt
           </span>
           <textarea id="systemPromptInput" rows="8" spellcheck="false"></textarea>
-          <span class="prompt-help">General behavior and identity rules.</span>
+          <span class="prompt-help">General behavior and identity rules for Custom mode.</span>
         </label>
 
         <label class="prompt-card">
@@ -70,8 +79,8 @@
       </div>
 
       <div class="prompt-actions">
-        <button id="savePromptsButton" type="button">Save local defaults</button>
-        <button id="resetPromptsButton" class="secondary" type="button">Reset repository defaults</button>
+        <button id="savePromptsButton" type="button">Save Custom preset</button>
+        <button id="resetPromptsButton" class="secondary" type="button">Reset Custom to General</button>
         <span id="promptSaveState" class="prompt-save-state"></span>
       </div>
     </section>
@@ -80,7 +89,7 @@
       <section id="messages" class="messages" aria-live="polite">
         <div class="empty-state" id="emptyState">
           <h1>Local AI</h1>
-          <p>Choose a model and send a message. Requests stay on this computer.</p>
+          <p>Choose a model, prompt preset and send a message. Requests stay on this computer.</p>
         </div>
       </section>
 
