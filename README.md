@@ -45,7 +45,7 @@ Start `aib`:
 powershell -ExecutionPolicy Bypass -File .\local\start.ps1
 ```
 
-The startup script prefers port `8181`. If Windows has reserved or blocked it, `aib` automatically selects another bindable local port and prints the actual URL.
+The startup script prefers port `8282`. If Windows has reserved or blocked it, `aib` automatically selects another bindable local port and prints the actual URL.
 
 ## Local chat UI
 

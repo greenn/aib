@@ -61,9 +61,9 @@ function Resolve-AibPort {
         return $RequestedPort
     }
 
-    # 8181 is preferred for compatibility. Other candidates are deliberately
+    # 8282 is preferred for compatibility. Other candidates are deliberately
     # spread out because Windows/Hyper-V can reserve whole port ranges.
-    $Candidates = @(8181, 8282, 8383, 8484, 8585, 8686, 8787, 8888, 8989, 9080, 9180)
+    $Candidates = @(8282, 8181, 8383, 8484, 8585, 8686, 8787, 8888, 8989, 9080, 9180)
     foreach ($Candidate in $Candidates) {
         if (Test-LocalPort $Candidate) {
             return $Candidate
@@ -115,8 +115,8 @@ Set-Location $RepoRoot
 Write-Host "Ollama PID: $($OllamaProcess.Id)"
 Write-Host "aib API: $BaseUrl"
 Write-Host "API docs: $BaseUrl/docs"
-if ($Port -ne 8181) {
-    Write-Host "Note: port 8181 is unavailable/reserved; using $Port instead."
+if ($Port -ne 8282) {
+    Write-Host "Note: port 8282 is unavailable/reserved; using $Port instead."
 }
 Write-Host "Press Ctrl+C to stop the API."
 
