@@ -86,6 +86,10 @@ Both `POST /chat` and `POST /chat/stream` accept:
 
 `prompt_preset` accepts `general`, `custom`, or `raw`.
 
+Clients may optionally pass an opaque `activity_label` with a chat request to
+match that request to an item in `/health`. It is a diagnostic label only and
+must not contain prompt, transcript, or generated text.
+
 For a clean aib-level request:
 
 ```json
@@ -121,7 +125,12 @@ Runtime-template variables:
 
 ## API
 
-- `GET /health` — service status, memory and Ollama connectivity.
+- `GET /health` — service status, memory and Ollama connectivity. In a browser it
+  opens a readable status page that refreshes every two seconds; use
+  `?format=json` (or `Accept: application/json`) for API JSON. The JSON also
+  includes `activeRequests`, `activeRequestDetails`, and `lastRequest` so a
+  client can show an in-progress generation. These diagnostics deliberately do
+  not include prompt or response text.
 - `GET /resources` — live local CPU/RAM/model-process resource snapshot.
 - `GET /models` — configured models and local availability/capabilities.
 - `GET /prompt-config` — current General/Custom/Raw prompt information.

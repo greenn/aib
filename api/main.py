@@ -3,15 +3,18 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 import httpx
 import psutil
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -78,7 +81,7 @@ CONFIGURED_MODELS = [
 app = FastAPI(
     title="aib",
     description="Local backend for AI models",
-    version="0.5.0",
+    version="0.5.1",
 )
 
 app.add_middleware(
@@ -90,6 +93,14 @@ app.add_middleware(
 )
 
 app.mount("/ui", StaticFiles(directory=UI_DIR), name="ui")
+
+
+# Do not put prompts or generated text in this registry: /health is a local
+# diagnostic endpoint and must remain safe to open in a browser.  It only
+# records the request's technical state so REA can show that Орфо is actually
+# being processed by AIB rather than merely waiting on its HTTP request.
+active_requests: dict[str, dict[str, Any]] = {}
+last_request: dict[str, Any] | None = None
 
 
 class ChatMessage(BaseModel):
@@ -120,6 +131,10 @@ class ChatRequest(BaseModel):
     # If omitted in raw mode, the model receives no system message from aib/caller.
     system: str | None = None
 
+    # Optional opaque caller label for local diagnostics. It must never contain
+    # prompt text; REA uses a recording ID here to match /health activity.
+    activity_label: str | None = Field(default=None, max_length=160)
+
 
 class PromptConfigUpdate(BaseModel):
     system_prompt: str
@@ -130,6 +145,68 @@ class EmbedRequest(BaseModel):
     input: str | list[str]
     model: str = EMBED_MODEL
     keep_alive: str = "10m"
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def start_activity(
+    *,
+    kind: str,
+    model: str,
+    prompt_preset: str | None = None,
+    think: bool | None = None,
+    label: str | None = None,
+) -> str:
+    request_id = uuid4().hex
+    active_requests[request_id] = {
+        "id": request_id,
+        "kind": kind,
+        "model": model,
+        "promptPreset": prompt_preset,
+        "think": think,
+        "label": label,
+        "phase": "Отправляем запрос в Ollama",
+        "startedAt": utc_now(),
+        "_startedAt": time.monotonic(),
+    }
+    return request_id
+
+
+def update_activity(request_id: str, phase: str) -> None:
+    activity = active_requests.get(request_id)
+    if activity:
+        activity["phase"] = phase
+
+
+def finish_activity(request_id: str, status: str) -> None:
+    global last_request
+    activity = active_requests.pop(request_id, None)
+    if not activity:
+        return
+    elapsed = max(0.0, time.monotonic() - float(activity["_startedAt"]))
+    last_request = {
+        key: value
+        for key, value in activity.items()
+        if not key.startswith("_")
+    }
+    last_request.update(
+        {
+            "status": status,
+            "finishedAt": utc_now(),
+            "elapsedSeconds": round(elapsed, 1),
+        }
+    )
+
+
+def active_requests_payload() -> list[dict[str, Any]]:
+    activities: list[dict[str, Any]] = []
+    for activity in active_requests.values():
+        public = {key: value for key, value in activity.items() if not key.startswith("_")}
+        public["elapsedSeconds"] = round(max(0.0, time.monotonic() - float(activity["_startedAt"])), 1)
+        activities.append(public)
+    return sorted(activities, key=lambda item: str(item["startedAt"]))
 
 
 class SafeFormatDict(dict[str, str]):
@@ -369,8 +446,88 @@ async def chat_ui() -> FileResponse:
     return FileResponse(UI_DIR / "index.html")
 
 
-@app.get("/health")
-async def health() -> dict[str, Any]:
+def format_health_age(seconds: Any) -> str:
+    try:
+        total = max(0, int(float(seconds)))
+    except (TypeError, ValueError):
+        return "—"
+    minutes, remainder = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    parts: list[str] = []
+    if hours:
+        parts.append(f"{hours} ч")
+    if minutes:
+        parts.append(f"{minutes} мин")
+    if remainder or not parts:
+        parts.append(f"{remainder} с")
+    return " ".join(parts)
+
+
+def health_html(payload: dict[str, Any]) -> str:
+    activities = payload.get("activeRequests") if isinstance(payload.get("activeRequests"), list) else []
+    busy = bool(activities)
+    state = "Выполняется запрос к модели" if busy else "AIB готов к работе"
+    state_class = "busy" if busy else "ready"
+    ollama = payload.get("ollama") if isinstance(payload.get("ollama"), dict) else {}
+    ollama_state = "Подключён" if ollama.get("status") == "ok" else "Недоступен"
+    active_cards = "".join(
+        f"<section class=\"active-card\"><strong>{escape(str(item.get('kind') or 'Запрос'))}</strong>"
+        f"<span>{escape(str(item.get('phase') or 'Обработка'))}</span>"
+        f"<span>Модель: {escape(str(item.get('model') or '—'))} · {escape(format_health_age(item.get('elapsedSeconds')))}</span>"
+        f"</section>"
+        for item in activities
+    ) or '<section class="active-card"><strong>Активных запросов нет</strong><span>Новые запросы появятся здесь во время работы с моделью.</span></section>'
+    last = payload.get("lastRequest") if isinstance(payload.get("lastRequest"), dict) else None
+    last_text = "Пока нет завершённых запросов"
+    if last:
+        last_text = (
+            f"{last.get('kind') or 'Запрос'} · {last.get('model') or '—'} · "
+            f"{last.get('status') or '—'} · {format_health_age(last.get('elapsedSeconds'))}"
+        )
+    return f"""<!doctype html>
+<html lang=\"ru\">
+<head>
+  <meta charset=\"utf-8\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <meta http-equiv=\"refresh\" content=\"2\">
+  <title>AIB — статус</title>
+  <style>
+    :root{{color-scheme:dark;font-family:Inter,Segoe UI,Arial,sans-serif;background:#102a37;color:#ecf4f6}}
+    body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at top,#1b5362,#102a37 58%)}}
+    main{{width:min(720px,100%);border:1px solid #4d737e;border-radius:12px;background:rgba(21,54,67,.92);box-shadow:0 20px 60px rgba(0,0,0,.28);overflow:hidden}}
+    header{{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:24px;border-bottom:1px solid #456773}}h1{{margin:0;font-size:24px;font-weight:650}}.version{{color:#a9c2c8;font-size:13px}}
+    .state{{display:flex;align-items:center;gap:9px;padding:12px 24px;background:rgba(20,116,118,.16);font-weight:650}}.dot{{width:10px;height:10px;border-radius:50%;background:#69dfba;box-shadow:0 0 0 4px rgba(105,223,186,.12)}}.busy .dot{{background:#f4c32e;box-shadow:0 0 0 4px rgba(244,195,46,.12);animation:pulse 1.1s ease-in-out infinite}}
+    .grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:20px 24px}}.card,.active-card{{padding:14px;border:1px solid #456773;border-radius:7px;background:rgba(12,42,54,.48)}}.card span,.active-card span{{display:block;margin-top:6px;color:#bed1d5;font-size:13px;overflow-wrap:anywhere}}.card strong,.active-card strong{{font-size:13px}}.number{{color:#72e3df;font-size:25px!important;font-weight:700;line-height:1.1}}.active-card{{margin:0 24px 12px;border-color:#5a858f}}.active-card strong{{color:#f4d26d}}footer{{display:flex;justify-content:space-between;gap:12px;padding:16px 24px;color:#a8c2c8;font-size:12px;border-top:1px solid #456773}}a{{color:#7ce5e1}}@keyframes pulse{{50%{{opacity:.42;transform:scale(.72)}}}}@media(max-width:520px){{body{{padding:12px}}header{{padding:18px}}.grid{{grid-template-columns:1fr;padding:16px}}.active-card{{margin:0 16px 12px}}footer{{padding:14px 16px}}}}
+  </style>
+</head>
+<body>
+  <main>
+    <header><div><h1>AIB (Орфо)</h1><span class=\"version\">Локальный сервис · версия {escape(str(payload.get('version') or '—'))}</span></div><a href=\"?format=json\">JSON</a></header>
+    <div class=\"state {state_class}\"><span class=\"dot\"></span>{state}</div>
+    <div class=\"grid\">
+      <section class=\"card\"><strong>Активные запросы</strong><span class=\"number\">{len(activities)}</span></section>
+      <section class=\"card\"><strong>Модель по умолчанию</strong><span>{escape(str(payload.get('default_model') or '—'))}</span></section>
+      <section class=\"card\"><strong>Ollama</strong><span>{escape(ollama_state)} · {escape(str(ollama.get('version') or '—'))}</span></section>
+      <section class=\"card\"><strong>Последний запрос</strong><span>{escape(last_text)}</span></section>
+    </div>
+    {active_cards}
+    <footer><span>Страница обновляется каждые 2 секунды.</span><span>API: <code>/health</code></span></footer>
+  </main>
+</body>
+</html>"""
+
+
+def wants_html_health(request: Request) -> bool:
+    requested_format = request.query_params.get("format", "").lower()
+    if requested_format == "json":
+        return False
+    if requested_format == "html":
+        return True
+    return "text/html" in request.headers.get("accept", "").lower()
+
+
+@app.get("/health", response_model=None)
+async def health(request: Request) -> dict[str, Any] | HTMLResponse:
     try:
         response = await ollama_request("GET", "/api/version")
         version = response.json().get("version")
@@ -379,7 +536,8 @@ async def health() -> dict[str, Any]:
         ollama = {"status": "unavailable", "url": OLLAMA_URL, "detail": exc.detail}
 
     resources = resource_snapshot()
-    return {
+    activities = active_requests_payload()
+    payload = {
         "status": "ok" if ollama["status"] == "ok" else "degraded",
         "service": "aib",
         "version": app.version,
@@ -392,7 +550,13 @@ async def health() -> dict[str, Any]:
             "percent": resources["system_ram_percent"],
         },
         "ollama": ollama,
+        "activeRequests": len(activities),
+        "activeRequestDetails": activities,
+        "lastRequest": last_request,
     }
+    if wants_html_health(request):
+        return HTMLResponse(health_html(payload), headers={"Cache-Control": "no-store"})
+    return payload
 
 
 @app.get("/resources")
@@ -496,35 +660,48 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
     started_at = time.perf_counter()
     start_resources = resource_snapshot()
     payload, prompt_metadata = build_chat_payload(request, stream=False)
-    response = await ollama_request("POST", "/api/chat", json=payload)
-    data = response.json()
-    message = data.get("message") or {}
-    end_resources = resource_snapshot()
-
-    return {
-        "model": data.get("model", request.model),
-        "response": message.get("content", ""),
-        "thinking": message.get("thinking"),
-        "done": data.get("done", False),
-        "done_reason": data.get("done_reason"),
-        "total_duration": data.get("total_duration"),
-        "load_duration": data.get("load_duration"),
-        "prompt_eval_count": data.get("prompt_eval_count"),
-        "prompt_eval_duration": data.get("prompt_eval_duration"),
-        "eval_count": data.get("eval_count"),
-        "eval_duration": data.get("eval_duration"),
-        "server_wall_seconds": round(time.perf_counter() - started_at, 3),
-        "prompt_layers": prompt_metadata,
-        "resources": {
-            "start": start_resources,
-            "end": end_resources,
-            "model_ram_peak_gb": max(
-                float(start_resources["model"]["rss_gb"]),
-                float(end_resources["model"]["rss_gb"]),
-            ),
-            "model_cpu_work_seconds": cpu_work_seconds(start_resources, end_resources),
-        },
-    }
+    activity_id = start_activity(
+        kind="chat",
+        model=request.model,
+        prompt_preset=request.prompt_preset,
+        think=request.think,
+        label=request.activity_label,
+    )
+    try:
+        update_activity(activity_id, "Модель Ollama обрабатывает запрос")
+        response = await ollama_request("POST", "/api/chat", json=payload)
+        data = response.json()
+        message = data.get("message") or {}
+        end_resources = resource_snapshot()
+        result = {
+            "model": data.get("model", request.model),
+            "response": message.get("content", ""),
+            "thinking": message.get("thinking"),
+            "done": data.get("done", False),
+            "done_reason": data.get("done_reason"),
+            "total_duration": data.get("total_duration"),
+            "load_duration": data.get("load_duration"),
+            "prompt_eval_count": data.get("prompt_eval_count"),
+            "prompt_eval_duration": data.get("prompt_eval_duration"),
+            "eval_count": data.get("eval_count"),
+            "eval_duration": data.get("eval_duration"),
+            "server_wall_seconds": round(time.perf_counter() - started_at, 3),
+            "prompt_layers": prompt_metadata,
+            "resources": {
+                "start": start_resources,
+                "end": end_resources,
+                "model_ram_peak_gb": max(
+                    float(start_resources["model"]["rss_gb"]),
+                    float(end_resources["model"]["rss_gb"]),
+                ),
+                "model_cpu_work_seconds": cpu_work_seconds(start_resources, end_resources),
+            },
+        }
+    except Exception:
+        finish_activity(activity_id, "error")
+        raise
+    finish_activity(activity_id, "completed")
+    return result
 
 
 @app.post("/chat/stream")
@@ -532,6 +709,14 @@ async def chat_stream(chat_request: ChatRequest, request: Request) -> StreamingR
     payload, prompt_metadata = build_chat_payload(chat_request, stream=True)
 
     async def generate():
+        activity_id = start_activity(
+            kind="chat_stream",
+            model=chat_request.model,
+            prompt_preset=chat_request.prompt_preset,
+            think=chat_request.think,
+            label=chat_request.activity_label,
+        )
+        result_status = "error"
         started_at = time.perf_counter()
         start_resources = resource_snapshot()
         peak_model_ram = float(start_resources["model"]["rss_gb"])
@@ -547,8 +732,9 @@ async def chat_stream(chat_request: ChatRequest, request: Request) -> StreamingR
 
         final_data: dict[str, Any] = {}
         try:
+            update_activity(activity_id, "Модель Ollama готовит ответ")
             timeout = httpx.Timeout(REQUEST_TIMEOUT, connect=30.0)
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 async with client.stream(
                     "POST",
                     f"{OLLAMA_URL}/api/chat",
@@ -566,6 +752,7 @@ async def chat_stream(chat_request: ChatRequest, request: Request) -> StreamingR
 
                     async for line in response.aiter_lines():
                         if await request.is_disconnected():
+                            result_status = "cancelled"
                             return
                         if not line:
                             continue
@@ -586,8 +773,10 @@ async def chat_stream(chat_request: ChatRequest, request: Request) -> StreamingR
                         content = message.get("content") or ""
 
                         if thinking:
+                            update_activity(activity_id, "Модель формирует рассуждение")
                             yield ndjson({"type": "thinking", "text": thinking})
                         if content:
+                            update_activity(activity_id, "Модель формирует ответ")
                             yield ndjson({"type": "token", "text": content})
 
                         if data.get("done"):
@@ -620,10 +809,13 @@ async def chat_stream(chat_request: ChatRequest, request: Request) -> StreamingR
                     },
                 }
             )
+            result_status = "completed"
         except httpx.ConnectError:
             yield ndjson({"type": "error", "detail": f"Ollama is not available at {OLLAMA_URL}"})
         except httpx.HTTPError as exc:
             yield ndjson({"type": "error", "detail": str(exc)})
+        finally:
+            finish_activity(activity_id, result_status)
 
     return StreamingResponse(
         generate(),
@@ -639,5 +831,13 @@ async def embed(request: EmbedRequest) -> dict[str, Any]:
         "input": request.input,
         "keep_alive": request.keep_alive,
     }
-    response = await ollama_request("POST", "/api/embed", json=payload)
-    return response.json()
+    activity_id = start_activity(kind="embed", model=request.model)
+    try:
+        update_activity(activity_id, "Модель Ollama создаёт эмбеддинги")
+        response = await ollama_request("POST", "/api/embed", json=payload)
+        result = response.json()
+    except Exception:
+        finish_activity(activity_id, "error")
+        raise
+    finish_activity(activity_id, "completed")
+    return result
