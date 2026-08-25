@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>aib help</title>
+  <link rel="stylesheet" href="/ui/help.css">
+</head>
+<body>
+  <main class="help-shell">
+    <header class="help-topbar">
+      <div>
+        <div class="brand">aib</div>
+        <div class="subtitle">help</div>
+      </div>
+      <nav class="top-actions" aria-label="Main navigation">
+        <a class="button-link" href="/chat">Chat</a>
+      </nav>
+    </header>
+
+    <div class="help-layout">
+      <aside class="help-menu" aria-label="Help sections">
+        <div class="menu-title">Help</div>
+        <button class="menu-item active" type="button" data-section="modelfile">Modelfile</button>
+        <button class="menu-item" type="button" data-section="preprompts">Pre-prompts</button>
+        <button class="menu-item" type="button" data-section="models">Models</button>
+      </aside>
+
+      <section class="help-content">
+        <section id="section-modelfile" class="help-section">
+          <div class="section-head">
+            <div>
+              <h1>Ollama Modelfile</h1>
+              <p>Shows the model configuration returned by Ollama. This is read-only.</p>
+            </div>
+            <label class="model-picker">
+              <span>Model</span>
+              <select id="modelSelect"></select>
+            </label>
+          </div>
+
+          <div class="command-card">
+            <div>
+              <div class="eyebrow">Equivalent CLI command</div>
+              <code id="commandText">ollama show --modelfile qwen3:4b</code>
+            </div>
+            <button id="refreshButton" type="button">Refresh</button>
+          </div>
+
+          <p class="explanation">
+            <code>SYSTEM</code>, <code>TEMPLATE</code>, <code>PARAMETER</code> and <code>ADAPTER</code>
+            are separate Modelfile instructions. Not every model contains every section.
+          </p>
+
+          <nav class="part-tabs" aria-label="Modelfile parts">
+            <button class="part-tab active" type="button" data-part="full">Full</button>
+            <button class="part-tab" type="button" data-part="system">SYSTEM</button>
+            <button class="part-tab" type="button" data-part="template">TEMPLATE</button>
+            <button class="part-tab" type="button" data-part="parameter">PARAMETER</button>
+            <button class="part-tab" type="button" data-part="adapter">ADAPTER</button>
+          </nav>
+
+          <div class="output-card">
+            <div class="output-head">
+              <strong id="outputTitle">Full Modelfile</strong>
+              <span id="outputStatus">Loading…</span>
+            </div>
+            <pre id="outputText">Loading…</pre>
+          </div>
+        </section>
+
+        <section id="section-preprompts" class="help-section" hidden>
+          <h1>Pre-prompts</h1>
+          <p><strong>General</strong> uses the repository System prompt and Runtime context.</p>
+          <p><strong>Custom</strong> uses your locally saved editable System prompt and Runtime context.</p>
+          <p><strong>Raw</strong> adds no aib-owned System or Runtime prompt. Model weights and the Ollama chat template still remain.</p>
+          <p>Open <a href="/chat">Chat</a> → <strong>Prompts</strong> to edit the Custom preset.</p>
+        </section>
+
+        <section id="section-models" class="help-section" hidden>
+          <h1>Local models</h1>
+          <div id="modelsSummary" class="models-summary">Loading…</div>
+        </section>
+      </section>
+    </div>
+  </main>
+
+  <script src="/ui/help.js" defer></script>
+</body>
+</html>
