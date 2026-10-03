@@ -41,6 +41,11 @@
 
     <section id="statusBar" class="status-bar">Connecting…</section>
 
+    <nav class="mode-tabs" aria-label="AIB mode">
+      <button id="chatModeButton" class="mode-tab active" type="button">Chat</button>
+      <button id="visionModeButton" class="mode-tab" type="button">Image → JSON</button>
+    </nav>
+
     <section id="runPanel" class="run-panel" hidden>
       <strong id="runState">Generating</strong>
       <span id="runElapsed">0.0 s</span>
@@ -86,7 +91,7 @@
       </div>
     </section>
 
-    <section class="workspace">
+    <section id="chatWorkspace" class="workspace">
       <section id="messages" class="messages" aria-live="polite">
         <div class="empty-state" id="emptyState">
           <h1>Local AI</h1>
@@ -101,6 +106,48 @@
         </div>
         <div id="reasoningContent" class="reasoning-content">Enable Thinking to show model reasoning here.</div>
       </aside>
+    </section>
+
+    <section id="visionPanel" class="vision-panel" hidden>
+      <section class="vision-card vision-input-card">
+        <div class="vision-card-header">
+          <div>
+            <strong>Image → JSON</strong>
+            <div class="prompt-help">Локальный анализ изображения через vision-модель Ollama.</div>
+          </div>
+          <label class="control">
+            <span>Vision model</span>
+            <select id="visionModelSelect"></select>
+          </label>
+        </div>
+
+        <label id="imageDropZone" class="image-drop-zone">
+          <input id="imageInput" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+          <strong>Выбрать изображение</strong>
+          <span>JPEG, PNG или WebP · до 15 MB</span>
+        </label>
+
+        <div id="imageMeta" class="image-meta">Файл не выбран.</div>
+        <img id="imagePreview" class="image-preview" alt="Предпросмотр изображения" hidden>
+
+        <label class="vision-prompt-label">
+          <span>Дополнительная инструкция <small>(необязательно)</small></span>
+          <textarea id="visionPromptInput" rows="3" placeholder="Например: отдельно перечисли элементы интерфейса или подробно прочитай текст."></textarea>
+        </label>
+
+        <button id="analyzeImageButton" class="primary-action" type="button" disabled>Анализировать</button>
+      </section>
+
+      <section class="vision-card vision-output-card">
+        <div class="vision-card-header">
+          <div>
+            <strong>JSON result</strong>
+            <div class="prompt-help">Структурированное описание сцены и найденных объектов.</div>
+          </div>
+          <button id="copyVisionJsonButton" class="secondary small" type="button">Copy JSON</button>
+        </div>
+        <pre id="visionJsonOutput" class="vision-json">{}</pre>
+      </section>
     </section>
 
     <section id="metrics" class="metrics" hidden>
@@ -122,7 +169,7 @@
       </div>
     </section>
 
-    <footer class="composer-footer">
+    <footer id="composerFooter" class="composer-footer">
       <form id="chatForm" class="composer">
         <textarea id="promptInput" rows="1" placeholder="Message local model…" autocomplete="off"></textarea>
         <button id="stopButton" class="stop" type="button" hidden>Stop</button>

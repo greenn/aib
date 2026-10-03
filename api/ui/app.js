@@ -31,6 +31,21 @@ const promptInput = document.getElementById('promptInput');
 const sendButton = document.getElementById('sendButton');
 const stopButton = document.getElementById('stopButton');
 
+const chatModeButton = document.getElementById('chatModeButton');
+const visionModeButton = document.getElementById('visionModeButton');
+const chatWorkspace = document.getElementById('chatWorkspace');
+const composerFooter = document.getElementById('composerFooter');
+const visionPanel = document.getElementById('visionPanel');
+const visionModelSelect = document.getElementById('visionModelSelect');
+const imageDropZone = document.getElementById('imageDropZone');
+const imageInput = document.getElementById('imageInput');
+const imageMeta = document.getElementById('imageMeta');
+const imagePreview = document.getElementById('imagePreview');
+const visionPromptInput = document.getElementById('visionPromptInput');
+const analyzeImageButton = document.getElementById('analyzeImageButton');
+const copyVisionJsonButton = document.getElementById('copyVisionJsonButton');
+const visionJsonOutput = document.getElementById('visionJsonOutput');
+
 const history = [];
 let busy = false;
 let currentController = null;
@@ -39,6 +54,10 @@ let timerId = null;
 let resourcePollId = null;
 let modelCapabilities = new Map();
 let promptConfigLoaded = false;
+let activeMode = 'chat';
+let selectedImageFile = null;
+let imagePreviewUrl = null;
+let hasChatMetrics = false;
 
 function secondsFromNs(value) {
   if (!value) return 0;
@@ -149,6 +168,10 @@ function syncPresetControl() {
   }
 }
 
+function syncVisionAnalyzeButton() {
+  analyzeImageButton.disabled = busy || !selectedImageFile || !visionModelSelect.value;
+}
+
 function setBusy(value) {
   busy = value;
   sendButton.disabled = value;
@@ -159,8 +182,15 @@ function setBusy(value) {
   newChatButton.disabled = value;
   savePromptsButton.disabled = value;
   resetPromptsButton.disabled = value;
+  chatModeButton.disabled = value;
+  visionModeButton.disabled = value;
+  visionModelSelect.disabled = value;
+  imageInput.disabled = value;
+  visionPromptInput.disabled = value;
+  copyVisionJsonButton.disabled = value;
   stopButton.hidden = !value;
   promptInput.disabled = false;
+  syncVisionAnalyzeButton();
   syncPresetControl();
 }
 
@@ -188,10 +218,10 @@ async function pollResources() {
   } catch (_) {}
 }
 
-function startRunPanel() {
+function startRunPanel(label = null) {
   runStartedAt = performance.now();
   runPanel.hidden = false;
-  runState.textContent = currentThinkEnabled() ? 'Thinking / generating' : 'Generating';
+  runState.textContent = label || (currentThinkEnabled() ? 'Thinking / generating' : 'Generating');
   runElapsed.textContent = '0.0 s';
   runCpu.textContent = 'CPU —';
   runRam.textContent = 'RAM —';
@@ -260,6 +290,7 @@ function updateMetrics(data, wallSeconds, thinkEnabled) {
   document.getElementById('metricModelRam').textContent = Number.isFinite(peakModelRam)
     ? `model RAM peak ${peakModelRam.toFixed(2)} GB`
     : 'model RAM peak —';
+  hasChatMetrics = true;
   metricsEl.hidden = false;
 }
 
@@ -281,8 +312,26 @@ async function loadModels() {
     }
 
     if (!configured.length) throw new Error('No chat models are available');
+
+    const visionModels = configured.filter(item => (item.modalities || []).includes('image'));
+    visionModelSelect.replaceChildren();
+    for (const model of visionModels) {
+      const option = document.createElement('option');
+      option.value = model.name;
+      option.textContent = `${model.name} · ${model.role}`;
+      if (model.name === data.vision_default) option.selected = true;
+      visionModelSelect.appendChild(option);
+    }
+    if (!visionModels.length) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'No installed vision model';
+      visionModelSelect.appendChild(option);
+    }
+
     syncThinkingControl();
-    setStatus(`Local · ${configured.length} chat models available · ${presetLabel()}`, 'ok');
+    syncVisionAnalyzeButton();
+    setStatus(`Local · ${configured.length} chat models · ${visionModels.length} vision models · ${presetLabel()}`, 'ok');
   } catch (error) {
     setStatus(`Model check failed: ${error.message}`, 'error');
   }
@@ -447,6 +496,153 @@ async function consumeNdjson(response, assistantNode, state) {
   if (buffer.trim()) handleStreamEvent(JSON.parse(buffer), assistantNode, state);
 }
 
+function setMode(mode) {
+  activeMode = mode === 'vision' ? 'vision' : 'chat';
+  const vision = activeMode === 'vision';
+
+  chatModeButton.classList.toggle('active', !vision);
+  visionModeButton.classList.toggle('active', vision);
+  chatWorkspace.hidden = vision;
+  composerFooter.hidden = vision;
+  visionPanel.hidden = !vision;
+  metricsEl.hidden = vision || !hasChatMetrics;
+
+  if (vision) {
+    promptEditor.hidden = true;
+    setStatus(
+      visionModelSelect.value
+        ? `Local · ${visionModelSelect.value} · Image → JSON`
+        : 'No installed vision model',
+      visionModelSelect.value ? 'ok' : 'error'
+    );
+  } else {
+    setStatus(`Local · ${modelSelect.value} · ${activePreset()}`, 'ok');
+    promptInput.focus();
+  }
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function clearImagePreviewUrl() {
+  if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
+  imagePreviewUrl = null;
+}
+
+function setVisionFile(file) {
+  if (!file) {
+    selectedImageFile = null;
+    clearImagePreviewUrl();
+    imagePreview.hidden = true;
+    imagePreview.removeAttribute('src');
+    imageMeta.textContent = 'Файл не выбран.';
+    syncVisionAnalyzeButton();
+    return;
+  }
+
+  const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+  if (!allowed.includes(file.type)) {
+    setStatus('Unsupported image type. Use JPEG, PNG or WebP.', 'error');
+    imageInput.value = '';
+    setVisionFile(null);
+    return;
+  }
+  if (file.size > 15 * 1024 * 1024) {
+    setStatus('Image is too large. Maximum size is 15 MB.', 'error');
+    imageInput.value = '';
+    setVisionFile(null);
+    return;
+  }
+
+  selectedImageFile = file;
+  clearImagePreviewUrl();
+  imagePreviewUrl = URL.createObjectURL(file);
+  imagePreview.src = imagePreviewUrl;
+  imagePreview.hidden = false;
+  imageMeta.textContent = `${file.name} · ${file.type} · ${formatBytes(file.size)}`;
+  visionJsonOutput.textContent = '{}';
+  setStatus(`Ready · ${visionModelSelect.value || 'vision model'} · ${file.name}`, 'ok');
+  syncVisionAnalyzeButton();
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read the image file'));
+    reader.onload = () => {
+      const value = String(reader.result || '');
+      const comma = value.indexOf(',');
+      if (comma < 0) {
+        reject(new Error('Could not encode the image'));
+        return;
+      }
+      resolve(value.slice(comma + 1));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function analyzeImage() {
+  if (busy || !selectedImageFile || !visionModelSelect.value) return;
+
+  const file = selectedImageFile;
+  const selectedModel = visionModelSelect.value;
+  const controller = new AbortController();
+  currentController = controller;
+  setBusy(true);
+  startRunPanel('Analyzing image');
+  setStatus(`Local · ${selectedModel} · analyzing ${file.name}`, 'ok');
+  visionJsonOutput.textContent = '{\n  "status": "analyzing"\n}';
+
+  try {
+    const imageBase64 = await fileToBase64(file);
+    const response = await fetch('/vision/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        image_base64: imageBase64,
+        mime_type: file.type,
+        filename: file.name,
+        model: selectedModel,
+        prompt: visionPromptInput.value.trim() || null,
+        keep_alive: '30m'
+      })
+    });
+
+    if (!response.ok) {
+      let detail = await response.text();
+      try {
+        const parsed = JSON.parse(detail);
+        detail = parsed.detail || detail;
+      } catch (_) {}
+      throw new Error(detail);
+    }
+
+    const data = await response.json();
+    visionJsonOutput.textContent = JSON.stringify(data.analysis || {}, null, 2);
+    const elapsed = stopRunPanel('Done');
+    setStatus(`Local · ${selectedModel} · image analyzed in ${fmtSeconds(elapsed)}`, 'ok');
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      stopRunPanel('Stopped');
+      visionJsonOutput.textContent = JSON.stringify({ error: 'stopped' }, null, 2);
+      setStatus('Vision analysis stopped');
+    } else {
+      stopRunPanel('Error');
+      visionJsonOutput.textContent = JSON.stringify({ error: error.message }, null, 2);
+      setStatus(`Vision analysis failed: ${error.message}`, 'error');
+    }
+  } finally {
+    currentController = null;
+    setBusy(false);
+  }
+}
+
 async function sendMessage(prompt) {
   if (busy || !prompt.trim()) return;
 
@@ -572,6 +768,7 @@ newChatButton.addEventListener('click', () => {
   history.length = 0;
   messagesEl.querySelectorAll('.message').forEach(node => node.remove());
   emptyState.hidden = false;
+  hasChatMetrics = false;
   metricsEl.hidden = true;
   runPanel.hidden = true;
   syncThinkingControl();
@@ -603,8 +800,56 @@ thinkSelect.addEventListener('change', () => {
   );
 });
 
+chatModeButton.addEventListener('click', () => setMode('chat'));
+visionModeButton.addEventListener('click', () => setMode('vision'));
+
+visionModelSelect.addEventListener('change', () => {
+  syncVisionAnalyzeButton();
+  if (activeMode === 'vision') {
+    setStatus(
+      visionModelSelect.value
+        ? `Local · ${visionModelSelect.value} · Image → JSON`
+        : 'No installed vision model',
+      visionModelSelect.value ? 'ok' : 'error'
+    );
+  }
+});
+
+imageInput.addEventListener('change', () => {
+  setVisionFile(imageInput.files?.[0] || null);
+});
+
+imageDropZone.addEventListener('dragover', event => {
+  event.preventDefault();
+  if (!busy) imageDropZone.classList.add('dragover');
+});
+
+imageDropZone.addEventListener('dragleave', () => {
+  imageDropZone.classList.remove('dragover');
+});
+
+imageDropZone.addEventListener('drop', event => {
+  event.preventDefault();
+  imageDropZone.classList.remove('dragover');
+  if (busy) return;
+  const file = event.dataTransfer?.files?.[0] || null;
+  if (file) setVisionFile(file);
+});
+
+analyzeImageButton.addEventListener('click', analyzeImage);
+
+copyVisionJsonButton.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(visionJsonOutput.textContent || '{}');
+    setStatus('JSON copied to clipboard.', 'ok');
+  } catch (error) {
+    setStatus(`Could not copy JSON: ${error.message}`, 'error');
+  }
+});
+
 syncPresetControl();
 Promise.all([loadModels(), loadPromptConfig()]).finally(() => {
   syncPresetControl();
-  promptInput.focus();
+  syncVisionAnalyzeButton();
+  setMode('chat');
 });

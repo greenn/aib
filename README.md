@@ -55,7 +55,10 @@ Open `/chat` on the same host and port printed by `start.ps1`:
 http://127.0.0.1:<port>/chat
 ```
 
-The UI provides model selection, Thinking On/Off, streaming output, Stop, a separate Reasoning panel, live/final resource metrics and prompt presets.
+The UI provides two local modes:
+
+- **Chat** — model selection, Thinking On/Off, streaming output, Stop, a separate Reasoning panel, live/final resource metrics and prompt presets.
+- **Image → JSON** — upload a JPEG/PNG/WebP image, analyze it with an installed vision model (default `gemma3:4b`) and receive validated structured JSON with a scene summary, detected objects, visible text, colors and uncertainties.
 
 ### Prompt presets
 
@@ -139,9 +142,36 @@ Runtime-template variables:
 - `GET /chat` — local browser chat UI.
 - `POST /chat` — non-streaming conversational generation.
 - `POST /chat/stream` — NDJSON streaming conversational generation.
+- `POST /vision/analyze` — structured image analysis through a vision-capable Ollama model. Accepts a Base64 image plus MIME type and returns validated JSON.
 - `POST /embed` — embeddings through `nomic-embed-text`.
 
-Default model: `qwen3:4b`.
+Default chat model: `qwen3:4b`. Default vision model: `gemma3:4b`.
+
+The vision endpoint uses Ollama structured outputs with a JSON Schema. The current result shape includes:
+
+```json
+{
+  "summary": "short description",
+  "scene": {
+    "type": "scene type",
+    "setting": "indoor",
+    "lighting": "lighting description"
+  },
+  "objects": [
+    {
+      "name": "object name",
+      "category": "object category",
+      "count": 1,
+      "confidence": 0.95,
+      "attributes": ["attribute"],
+      "location": "position in frame"
+    }
+  ],
+  "visible_text": [],
+  "dominant_colors": [],
+  "uncertainties": []
+}
+```
 
 ## Storage
 
