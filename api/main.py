@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import time
@@ -22,8 +24,11 @@ load_dotenv()
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 DEFAULT_MODEL = os.getenv("AIB_DEFAULT_MODEL", "qwen3:4b")
+VISION_MODEL = os.getenv("AIB_VISION_MODEL", "gemma3:4b")
 EMBED_MODEL = os.getenv("AIB_EMBED_MODEL", "nomic-embed-text")
 REQUEST_TIMEOUT = float(os.getenv("AIB_REQUEST_TIMEOUT", "600"))
+MAX_IMAGE_BYTES = 15 * 1024 * 1024
+SUPPORTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
 API_DIR = Path(__file__).resolve().parent
 REPO_ROOT = API_DIR.parent
@@ -81,7 +86,7 @@ CONFIGURED_MODELS = [
 app = FastAPI(
     title="aib",
     description="Local backend for AI models",
-    version="0.5.1",
+    version="0.6.0",
 )
 
 app.add_middleware(
@@ -134,6 +139,39 @@ class ChatRequest(BaseModel):
     # Optional opaque caller label for local diagnostics. It must never contain
     # prompt text; REA uses a recording ID here to match /health activity.
     activity_label: str | None = Field(default=None, max_length=160)
+
+
+class VisionObject(BaseModel):
+    name: str
+    category: str
+    count: int = Field(default=1, ge=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+    attributes: list[str] = Field(default_factory=list)
+    location: str | None = None
+
+
+class VisionScene(BaseModel):
+    type: str
+    setting: Literal["indoor", "outdoor", "mixed", "unknown"]
+    lighting: str
+
+
+class VisionDescription(BaseModel):
+    summary: str
+    scene: VisionScene
+    objects: list[VisionObject]
+    visible_text: list[str] = Field(default_factory=list)
+    dominant_colors: list[str] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+
+
+class VisionAnalyzeRequest(BaseModel):
+    image_base64: str = Field(min_length=1, max_length=30_000_000)
+    mime_type: str = "image/jpeg"
+    filename: str | None = Field(default=None, max_length=255)
+    model: str = VISION_MODEL
+    prompt: str | None = Field(default=None, max_length=4000)
+    keep_alive: str = "30m"
 
 
 class PromptConfigUpdate(BaseModel):
@@ -410,6 +448,34 @@ def ndjson(data: dict[str, Any]) -> bytes:
     return (json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
 
 
+def normalize_image_base64(value: str) -> tuple[str, int]:
+    payload = value.strip()
+    if payload.startswith("data:"):
+        try:
+            _, payload = payload.split(",", 1)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid image data URL") from exc
+
+    payload = "".join(payload.split())
+    try:
+        decoded = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="image_base64 is not valid Base64") from exc
+
+    if not decoded:
+        raise HTTPException(status_code=400, detail="Image is empty")
+    if len(decoded) > MAX_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Image is too large; maximum is {MAX_IMAGE_BYTES // (1024 * 1024)} MB",
+        )
+    return payload, len(decoded)
+
+
+def configured_model(name: str) -> dict[str, Any] | None:
+    return next((model for model in CONFIGURED_MODELS if model["name"] == name), None)
+
+
 async def ollama_request(method: str, path: str, **kwargs: Any) -> httpx.Response:
     try:
         # Ollama is always local. On Windows, httpx may otherwise honour a
@@ -436,6 +502,7 @@ async def root() -> dict[str, str]:
         "service": "aib",
         "version": app.version,
         "chat": "/chat",
+        "vision": "/vision/analyze",
         "docs": "/docs",
         "prompt_config": "/prompt-config",
     }
@@ -578,10 +645,103 @@ async def models() -> dict[str, Any]:
 
     return {
         "default": DEFAULT_MODEL,
+        "vision_default": VISION_MODEL,
         "embedding_default": EMBED_MODEL,
         "configured": configured,
         "installed": installed_raw,
     }
+
+
+@app.post("/vision/analyze")
+async def vision_analyze(request: VisionAnalyzeRequest) -> dict[str, Any]:
+    model_info = configured_model(request.model)
+    if not model_info:
+        raise HTTPException(status_code=400, detail=f"Model is not configured: {request.model}")
+    if "image" not in model_info.get("modalities", []):
+        raise HTTPException(status_code=400, detail=f"Model does not support images: {request.model}")
+    if request.mime_type not in SUPPORTED_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail="Unsupported image type. Use JPEG, PNG or WebP.",
+        )
+
+    image_base64, image_bytes = normalize_image_base64(request.image_base64)
+    schema = VisionDescription.model_json_schema()
+    instruction = (
+        "Проанализируй изображение как систему компьютерного зрения. "
+        "Не выдумывай объекты, которых нельзя уверенно увидеть. "
+        "Дай краткое описание всей сцены. Перечисли отдельные видимые объекты; "
+        "для каждого укажи категорию, примерное количество, уверенность от 0 до 1, "
+        "важные признаки и положение в кадре. Видимый текст перепиши максимально точно. "
+        "Укажи основные цвета. Всё сомнительное перечисли в uncertainties. "
+        "Верни только данные, соответствующие переданной JSON Schema."
+    )
+    if request.prompt and request.prompt.strip():
+        instruction += "\n\nДополнительная инструкция пользователя:\n" + request.prompt.strip()
+
+    payload: dict[str, Any] = {
+        "model": request.model,
+        "messages": [
+            {
+                "role": "user",
+                "content": instruction,
+                "images": [image_base64],
+            }
+        ],
+        "stream": False,
+        "keep_alive": request.keep_alive,
+        "format": schema,
+        "options": {"temperature": 0},
+    }
+
+    started_at = time.perf_counter()
+    start_resources = resource_snapshot()
+    activity_id = start_activity(kind="vision", model=request.model, think=False)
+    try:
+        update_activity(activity_id, "Модель анализирует изображение")
+        response = await ollama_request("POST", "/api/chat", json=payload)
+        data = response.json()
+        message = data.get("message") or {}
+        content = message.get("content") or ""
+        try:
+            analysis = VisionDescription.model_validate_json(content)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="Vision model returned JSON that does not match the expected schema",
+            ) from exc
+
+        end_resources = resource_snapshot()
+        result = {
+            "model": data.get("model", request.model),
+            "filename": request.filename,
+            "mime_type": request.mime_type,
+            "image_bytes": image_bytes,
+            "analysis": analysis.model_dump(),
+            "done": data.get("done", False),
+            "done_reason": data.get("done_reason"),
+            "total_duration": data.get("total_duration"),
+            "load_duration": data.get("load_duration"),
+            "prompt_eval_count": data.get("prompt_eval_count"),
+            "prompt_eval_duration": data.get("prompt_eval_duration"),
+            "eval_count": data.get("eval_count"),
+            "eval_duration": data.get("eval_duration"),
+            "server_wall_seconds": round(time.perf_counter() - started_at, 3),
+            "resources": {
+                "start": start_resources,
+                "end": end_resources,
+                "model_ram_peak_gb": max(
+                    float(start_resources["model"]["rss_gb"]),
+                    float(end_resources["model"]["rss_gb"]),
+                ),
+                "model_cpu_work_seconds": cpu_work_seconds(start_resources, end_resources),
+            },
+        }
+    except Exception:
+        finish_activity(activity_id, "error")
+        raise
+    finish_activity(activity_id, "completed")
+    return result
 
 
 @app.get("/prompt-config")
